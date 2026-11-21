@@ -110,7 +110,7 @@ export function ownerRouter(services: FirebaseServices, authenticate: OwnerAuthe
         patch: archived ? {
           status: "archived", archived: true,
           pre_archive_status: song.status === "generating" ? "failed" : song.status ?? "draft",
-        } : { status: song.pre_archive_status ?? "draft", archived: false },
+        } : { status: song.pre_archive_status ?? "draft", archived: false, archive_reason: null, autopilot_replacement_pending: false },
         action: archived ? "archived" : "restored",
       };
     });

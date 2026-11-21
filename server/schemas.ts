@@ -17,6 +17,11 @@ export const editFields = studioFields.omit({ feeling_key: true }).partial().ref
   (value) => Object.keys(value).length > 0, "No changes supplied."
 );
 export const musicModels = z.enum(["lyria-3-clip-preview", "lyria-3.5"]);
+export const autopilotSettings = z.object({
+  enabled: z.boolean(), daily_budget_usd: z.number().finite().min(0).max(1000),
+  max_new_songs: z.number().int().min(0).max(12), max_takes_per_song: z.number().int().min(1).max(4),
+  run_time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5][05]$/), daily_report: z.boolean(),
+}).strict();
 export const studioSettings = z.object({
   feelings: z.array(label).min(1).max(30),
   lines_per_song: z.number().int().min(1).max(12),
@@ -25,6 +30,8 @@ export const studioSettings = z.object({
   block_substrings: z.boolean(),
   no_numbers_prices_brands: z.boolean(),
   default_model: musicModels,
+  autopilot: autopilotSettings.optional(),
+  text_model: z.string().trim().max(64).regex(/^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$/).optional(),
   target_length: z.number().int().min(28).max(44),
   daily_budget_usd: z.number().finite().min(0).max(1000).optional(),
 }).strict();

@@ -381,6 +381,23 @@
           "type": "boolean",
           "description": "Whether to forbid numbers, prices, and brand names."
         },
+        "autopilot": {
+          "type": "object",
+          "description": "Optional daily Autopilot configuration. Defaults to disabled.",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "daily_budget_usd": { "type": "number", "minimum": 0, "maximum": 1000 },
+            "max_new_songs": { "type": "integer", "minimum": 0, "maximum": 12 },
+            "max_takes_per_song": { "type": "integer", "minimum": 1, "maximum": 4 },
+            "run_time": { "type": "string", "description": "HH:mm in Africa/Casablanca, in five-minute increments." },
+            "daily_report": { "type": "boolean" }
+          }
+        },
+        "text_model": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Optional Gemini model ID for lyric drafts and vocal checks."
+        },
         "default_model": {
           "type": "string",
           "maxLength": 64,

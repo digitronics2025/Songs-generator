@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "../data/songs";
 
+import { AutopilotPanel } from "./AutopilotPanel";
+
 interface SettingsViewProps {
   settings: StudioSettings;
   onSaveSettings: (updated: StudioSettings) => Promise<void>;
@@ -40,6 +42,8 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
   const [defaultModel, setDefaultModel] = useState(
     settings.default_model || "lyria-3-clip-preview"
   );
+  const [autopilot, setAutopilot] = useState(settings.autopilot);
+  const [textModel, setTextModel] = useState(settings.text_model);
   const [budget, setBudget] = useState(settings.daily_budget_usd);
   const [targetLength, setTargetLength] = useState(settings.target_length || 30);
 
@@ -91,6 +95,8 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
     setBlockSubstrings(DEFAULT_STUDIO_SETTINGS.block_substrings);
     setNoNumbersPricesBrands(DEFAULT_STUDIO_SETTINGS.no_numbers_prices_brands);
     setDefaultModel(DEFAULT_STUDIO_SETTINGS.default_model);
+    setAutopilot(DEFAULT_STUDIO_SETTINGS.autopilot);
+    setTextModel(DEFAULT_STUDIO_SETTINGS.text_model);
     setBudget(DEFAULT_STUDIO_SETTINGS.daily_budget_usd);
     setTargetLength(DEFAULT_STUDIO_SETTINGS.target_length);
     setError(null);
@@ -102,6 +108,12 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
     setSavedSuccess(false);
 
     try {
+      if (!/^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$/.test(textModel.trim())) {
+        throw new Error("Enter a Gemini model ID, such as gemini-4-hydrogen.");
+      }
+      if (!/^(?:[01]\d|2[0-3]):[0-5][05]$/.test(autopilot.run_time)) {
+        throw new Error("Choose an Autopilot time in five-minute increments.");
+      }
       const updated: StudioSettings = {
         feelings,
         lines_per_song: Math.max(1, Math.min(12, Math.round(linesPerSong))),
@@ -110,6 +122,8 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
         block_substrings: blockSubstrings,
         no_numbers_prices_brands: noNumbersPricesBrands,
         default_model: defaultModel,
+        text_model: textModel.trim(),
+        autopilot,
         target_length: Math.max(28, Math.min(44, Math.round(targetLength))),
         daily_budget_usd: budget,
         updated_at: new Date().toISOString(),
@@ -387,6 +401,12 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
             </div>
 
             <label className="block text-xs font-semibold text-[#57554F]">
+              Gemini model for lyrics and vocal checks
+              <input value={textModel} maxLength={64} spellCheck={false} autoCapitalize="none"
+                onChange={(event) => setTextModel(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-[#D4D2CA] bg-white px-3 py-2 font-mono" />
+            </label>
+            <label className="block text-xs font-semibold text-[#57554F]">
               Daily Gemini budget (USD, resets at 00:00 UTC)
               <input type="number" min={0} max={1000} step={0.01} value={budget}
                 onChange={(event) => setBudget(Number(event.target.value))}
@@ -412,6 +432,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
           </div>
         </div>
       </div>
+      <AutopilotPanel settings={autopilot} onChange={setAutopilot} />
     </div>
   );
 }

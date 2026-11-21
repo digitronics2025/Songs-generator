@@ -1,3 +1,4 @@
+import { DEFAULT_AUTOPILOT, type AutopilotSettings } from "../lib/autopilot.ts";
 import type { AdminFeeling } from "../lib/lyricQuality.ts";
 import type { GenerationFailureDetail, ProposedLyric, RepairLogEntry } from "../lib/songRepair.ts";
 
@@ -29,6 +30,7 @@ export interface SongTake {
   created_at: string;
   status: "ready" | "failed" | "generating";
   is_approved?: boolean;
+  auto_approved?: boolean;
   lyric_revision?: string;
   passed_all_checks?: boolean;
   failure_reasons?: string[];
@@ -62,6 +64,8 @@ export interface StudioSettings {
   block_substrings: boolean;
   no_numbers_prices_brands: boolean;
   default_model: string;
+  text_model: string;
+  autopilot: AutopilotSettings;
   target_length: number;
   daily_budget_usd: number;
   updated_at: string;
@@ -97,6 +101,8 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   block_substrings: true,
   no_numbers_prices_brands: true,
   default_model: "lyria-3-clip-preview",
+  text_model: "gemini-4-hydrogen",
+  autopilot: DEFAULT_AUTOPILOT,
   target_length: 30,
   daily_budget_usd: 0,
   updated_at: "",
@@ -117,6 +123,8 @@ export interface SongSpec {
 }
 
 export interface SongState {
+  auto_approved?: boolean;
+  archive_reason?: string | null;
   id: string;
   number: number;
   title: string;

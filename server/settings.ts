@@ -1,11 +1,13 @@
-import type { Firestore } from "firebase-admin/firestore";
+import type { DocumentData, Firestore } from "firebase-admin/firestore";
 import { DEFAULT_STUDIO_SETTINGS, type StudioSettings } from "../src/data/songs.ts";
 import { musicModels, studioSettings } from "./schemas.ts";
 import { defaultBudget } from "./limits.ts";
 
 export async function readSettings(db: Firestore): Promise<StudioSettings> {
-  const snap = await db.doc("settings/app_settings").get();
-  const input = snap.data() ?? {};
+  return settingsFromDocument((await db.doc("settings/app_settings").get()).data());
+}
+
+export function settingsFromDocument(input: DocumentData = {}): StudioSettings {
   const defaults = { ...DEFAULT_STUDIO_SETTINGS, daily_budget_usd: defaultBudget() };
   const { updated_at, ownerId, ...base } = defaults;
   const fields = { ...base };

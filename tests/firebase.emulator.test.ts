@@ -7,7 +7,10 @@ import { collection, doc, getDoc, getDocs, setDoc } from "firebase/firestore";
 import { getBytes, ref, uploadBytes } from "firebase/storage";
 import { createApp } from "../server.ts";
 import { firebaseServices, type FirebaseServices } from "../server/config.ts";
-import { reserveBudget, hash } from "../server/limits.ts";
+import { claimAutopilotRun, getAutopilotStatus, runAutopilot } from "../server/autopilot.ts";
+import { autopilotSongs, processAutopilotSong } from "../server/autopilotWork.ts";
+import { DEFAULT_AUTOPILOT } from "../src/lib/autopilot.ts";
+import { reserveBudget, hash, dayKey } from "../server/limits.ts";
 import { lyricRevision, migrateCatalog } from "../server/migration.ts";
 import { renderRules } from "../scripts/render-rules.ts";
 import { INITIAL_SONGS } from "../src/data/songs.ts";
@@ -265,5 +268,105 @@ describe("real local Express, Auth and Firestore", () => {
     expect(records.docs[0].data()).toMatchObject(ack);
     await ref.update({ revoked: true });
     expect((await fetch(origin + "/api/v1/songs", { headers })).status).toBe(401);
+  });
+});
+
+describe("Autopilot with real Firestore transactions", () => {
+  it("handles scheduled time and prevents overlap across the Casablanca date boundary", async () => {
+    const db = services.db;
+    await db.doc("settings/app_settings").set({
+      autopilot: { ...DEFAULT_AUTOPILOT, enabled: true, daily_budget_usd: 0.1 },
+    }, { merge: true });
+    const before = Date.parse("2026-07-20T01:59:00Z");
+    expect(await claimAutopilotRun(db, true, before)).toEqual({ skipped: "not_due" });
+    const late = Date.parse("2026-07-20T22:58:00Z");
+    expect(await claimAutopilotRun(db, false, late)).toHaveProperty("budget");
+    expect(await claimAutopilotRun(db, false, late + 3 * 60_000)).toEqual({ skipped: "running" });
+    expect(await claimAutopilotRun(db, false, late + 60_000)).toEqual({ skipped: "already_ran" });
+  });
+
+  it("claims only one run, respects the draft and spend caps, approves the best qualifying take and archives four failures", async () => {
+    const db = services.db;
+    await db.doc("settings/app_settings").set({
+      daily_budget_usd: 10,
+      autopilot: { ...DEFAULT_AUTOPILOT, enabled: true, daily_budget_usd: 0.1, max_new_songs: 3 },
+    }, { merge: true });
+    const fixture = INITIAL_SONGS[0];
+    const rev = lyricRevision(fixture.title, fixture.lines);
+    const fixtureRows = [
+      ["ap-old", "lyric_approved"], ["ap-new", "lyric_approved"], ["ap-ready", "ready"],
+      ["ap-archive", "failed"], ["ap-budget", "failed"], ["ap-after-budget", "needs_person"],
+    ];
+    await Promise.all(fixtureRows.map(([id, status], index) => db.doc("songs/" + id).set({
+      ...fixture, id, status, archived: false, created_at: "2026-01-0" + (index + 1) + "T00:00:00Z",
+    })));
+    const archivedSong = db.doc("songs/ap-archive");
+    for (let i = 1; i <= 4; i++) {
+      await archivedSong.collection("takes").doc("take-" + i).set({
+        id: "take-" + i, take_number: i, status: "failed", lyric_revision: rev,
+        storage_path: "songs/takes/ap-archive/take-" + i + ".wav", failure_reasons: ["WORDS_HEARD_LOW"],
+      });
+    }
+    const ready = db.doc("songs/ap-ready").collection("takes");
+    for (const [index, words] of [90, 97, 99].entries()) {
+      await ready.doc("take-" + index).set({
+        id: "take-" + index, take_number: index, status: "ready", lyric_revision: rev, passed_all_checks: true,
+        storage_path: "songs/takes/ap-ready/take-" + index + ".wav", words_heard_pct: words,
+        duration_seconds: 30, lufs: -14, true_peak_db: -2, voice_start: 0.5, voice_end: index === 2 ? 29 : 27,
+        extra_words: [], repeated_words: [], missing_words: [],
+      });
+    }
+    const drafts: Array<{ feeling: string; replacement?: string }> = [];
+    const processed: string[] = [];
+    const processedIds = new Set(fixtureRows.map(([id]) => id));
+    const usageRef = db.doc("studio_usage/" + dayKey());
+    const before = (await usageRef.get()).get("reserved_micros") ?? 0;
+    const actions: NonNullable<Parameters<typeof runAutopilot>[2]> = {
+      songs: async () => (await autopilotSongs(db)).filter(({ id }) => processedIds.has(id)),
+      replacements: async () => [{ id: "prior-archive", feeling: "mothers_care" }],
+      draft: async (_db, _settings, _uid, feeling, budget, replacement) => {
+        drafts.push({ feeling, replacement }); // No model calls in this test.
+        const ref = db.doc(budget.path);
+        await db.runTransaction(async (tx) => {
+          const data = await tx.get(ref);
+          tx.update(ref, { drafted: data.get("drafted") + 1 });
+        });
+        return "draft";
+      },
+      process: async (target, candidate, uid, budget, onMusicSaved) => {
+        processed.push(candidate.id);
+        if (candidate.id === "ap-old" || candidate.id === "ap-budget") {
+          await reserveBudget(db, 60_000, budget);
+          onMusicSaved();
+          return {};
+        }
+        if (candidate.id === "ap-new") return {};
+        return processAutopilotSong(target, candidate, uid, budget, onMusicSaved);
+      },
+      report: async () => { throw new Error("Report is off in this emulator test."); },
+    };
+    const attempts = await Promise.all([
+      runAutopilot(services, { owner: "owner-uid" }, actions), runAutopilot(services, { owner: "owner-uid" }, actions),
+    ]);
+    expect(attempts).toContainEqual({ skipped: "already_ran" });
+    expect(drafts).toHaveLength(3);
+    expect(drafts[0]).toEqual({ feeling: "mothers_care", replacement: "prior-archive" });
+    expect(processed).toEqual(["ap-old", "ap-new", "ap-ready", "ap-archive", "ap-budget"]);
+    expect((await usageRef.get()).get("reserved_micros")).toBe(before + 60_000);
+    const status = await getAutopilotStatus(db);
+    expect(status.last_run).toMatchObject({ status: "completed", drafted: 3, generated: 1, archived: 1, approved: 1,
+      reserved_micros: 60_000, budget_micros: 100_000, stop_reason: "autopilot_budget", report_status: "skipped" });
+    expect((await db.doc("songs/ap-ready").get()).data()).toMatchObject({
+      status: "approved", auto_approved: true, approved_take_id: "take-1",
+    });
+    expect((await ready.doc("take-1").get()).data()).toMatchObject({ is_approved: true, auto_approved: true });
+    expect((await ready.doc("take-2").get()).data()).not.toHaveProperty("is_approved");
+    expect((await archivedSong.get()).data()).toMatchObject({
+      status: "archived", archived: true, archive_reason: expect.stringContaining("4-take"),
+      autopilot_replacement_pending: true,
+    });
+    expect((await archivedSong.collection("takes").get()).size).toBe(4);
+    const history = await db.collection("song_history").where("song_id", "==", "ap-archive").get();
+    expect(history.docs[0]?.get("action")).toBe("archived");
   });
 });
