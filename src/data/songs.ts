@@ -15,11 +15,11 @@ export interface SongTake {
   id: string;
   take_number: number;
   model: string;
-  storage_path: string;
+  storage_path: string | null;
   download_url?: string | null;
-  duration_seconds: number;
-  lufs: number;
-  true_peak_db: number;
+  duration_seconds: number | null;
+  lufs: number | null;
+  true_peak_db: number | null;
   words_heard_pct: number | null;
   missing_words: string[];
   extra_words: string[];
@@ -27,7 +27,14 @@ export interface SongTake {
   voice_end: number | null;
   cost_estimate: number;
   created_at: string;
-  status: "ready" | "failed";
+  status: "ready" | "failed" | "generating";
+  is_approved?: boolean;
+  lyric_revision?: string;
+  passed_all_checks?: boolean;
+  failure_reasons?: string[];
+  raw_storage_path?: string | null;
+  transcribed_text?: string | null;
+  repeated_words?: string[];
   ownerId: string;
   tempo_bpm?: number;
 }
@@ -39,7 +46,8 @@ export interface SongHistoryItem {
   title: string;
   lines: string[];
   admin_feeling: string;
-  action: "created" | "edited" | "archived" | "restored" | "migrated" | "lyric_approved";
+  action: "created" | "edited" | "archived" | "restored" | "migrated" | "lyric_approved" | "imported";
+  source?: string;
   timestamp: string;
   ownerId: string;
 }
@@ -53,6 +61,7 @@ export interface StudioSettings {
   no_numbers_prices_brands: boolean;
   default_model: string;
   target_length: number;
+  daily_budget_usd: number;
   updated_at: string;
   ownerId: string;
 }
@@ -87,8 +96,9 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   no_numbers_prices_brands: true,
   default_model: "lyria-3-clip-preview",
   target_length: 30,
-  updated_at: new Date().toISOString(),
-  ownerId: "contact@tenten.ma",
+  daily_budget_usd: 0,
+  updated_at: "",
+  ownerId: "",
 };
 
 export interface SongSpec {
@@ -116,7 +126,8 @@ export interface SongState {
   tempo_bpm: number;
   instruments: string;
   vocal_tone: string;
-  status: SongStatus;
+  status: string;
+  closest_match_pct?: number;
   best_take_id: string | null;
   created_at: string;
   updated_at: string;
@@ -182,6 +193,8 @@ export function countArabicWords(line: string): number {
   if (!trimmed) return 0;
   return trimmed.split(/\s+/).length;
 }
+
+export const MAX_DRAFT_BATCH = 12;
 
 export const INITIAL_SONGS: SongSpec[] = [
   {

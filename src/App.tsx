@@ -1,123 +1,41 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Archive,
-  Check,
-  CheckCircle2,
-  Clock,
   Download,
-  AlertCircle,
-  AlertTriangle,
   Loader2,
   LogIn,
   LogOut,
   Pause,
   Play,
-  RotateCcw,
   Search,
-  Settings as SettingsIcon,
   SkipBack,
   SkipForward,
   Sparkles,
-  Square,
   Wrench,
-  X,
   Plus,
   Layers,
   History,
-  ShieldCheck,
-  Filter,
-  SlidersHorizontal,
 } from "lucide-react";
-import JSZip from "jszip";
-import {
-  onAuthStateChanged,
-  signInWithPopup,
-  signOut,
-  type User,
-} from "firebase/auth";
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  onSnapshot,
-  query,
-  setDoc,
-  updateDoc,
-  where,
-  writeBatch,
-} from "firebase/firestore";
-import {
-  getBlob,
-  getDownloadURL,
-  ref,
-  uploadBytes,
-} from "firebase/storage";
 import { SongRow } from "./components/SongRow";
 import { NewSongModal } from "./components/NewSongModal";
 import { BatchGeneratorModal } from "./components/BatchGeneratorModal";
 import { SettingsView } from "./components/SettingsView";
 import { SongHistoryDrawer } from "./components/SongHistoryDrawer";
 import {
-  DEFAULT_STUDIO_SETTINGS,
-  INITIAL_SONGS,
   formatSongFilename,
-  type SongHistoryItem,
   type SongState,
-  type SongStatus,
-  type SongTake,
   type SongsJsonEntry,
-  type StudioSettings,
 } from "./data/songs";
-import {
-  OperationType,
-  auth,
-  db,
-  googleProvider,
-  handleFirestoreError,
-  storage,
-} from "./lib/firebase";
 import { validateLyrics } from "./lib/lyricQuality";
+import { studioAudio } from "./lib/api";
+import { countStatuses, filterStatus, type StatusFilter } from "./lib/catalogState";
+import { useStudio } from "./hooks/useStudio";
+import { useStudioAudio, saveBlob } from "./hooks/useStudioAudio";
+import { useSongActions } from "./hooks/useSongActions";
+import { StudioAdministration } from "./components/StudioAdministration";
 
 type ActiveTab = "library" | "settings" | "export";
-type StatusFilter = "all" | SongStatus;
 type DateFilter = "all" | "today" | "week" | "newest" | "oldest";
-
-interface QualityReportPayload {
-  words_heard_pct: number | null;
-  transcribed_text: string | null;
-  missing_words: string[];
-  extra_words: string[];
-  voice_start_seconds: number | null;
-  voice_end_seconds: number | null;
-}
-
-function decodeQualityReportHeader(encoded: string | null): QualityReportPayload | null {
-  if (!encoded) return null;
-  try {
-    const binary = atob(encoded);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    const json = new TextDecoder().decode(bytes);
-    const parsed = JSON.parse(json) as Partial<QualityReportPayload>;
-    return {
-      words_heard_pct:
-        typeof parsed.words_heard_pct === "number" ? parsed.words_heard_pct : null,
-      transcribed_text:
-        typeof parsed.transcribed_text === "string" ? parsed.transcribed_text : null,
-      missing_words: Array.isArray(parsed.missing_words) ? parsed.missing_words : [],
-      extra_words: Array.isArray(parsed.extra_words) ? parsed.extra_words : [],
-      voice_start_seconds:
-        typeof parsed.voice_start_seconds === "number" ? parsed.voice_start_seconds : null,
-      voice_end_seconds:
-        typeof parsed.voice_end_seconds === "number" ? parsed.voice_end_seconds : null,
-    };
-  } catch {
-    return null;
-  }
-}
 
 function formatClock(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return "0:00";
@@ -127,31 +45,13 @@ function formatClock(sec: number): string {
 }
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [authReady, setAuthReady] = useState(false);
-  const [authLoading, setAuthLoading] = useState(false);
-  const [idToken, setIdToken] = useState<string>("");
-
-  const [songs, setSongs] = useState<SongState[]>([]);
-  const [historyItems, setHistoryItems] = useState<SongHistoryItem[]>([]);
-  const [settings, setSettings] = useState<StudioSettings>(DEFAULT_STUDIO_SETTINGS);
-  const [loading, setLoading] = useState(true);
-  const [globalError, setGlobalError] = useState<string | null>(null);
-  const [fatalError, setFatalError] = useState<Error | null>(null);
-
-  const reportFirestoreError = (
-    err: unknown,
-    operationType: OperationType,
-    path: string | null
-  ): never => {
-    try {
-      return handleFirestoreError(err, operationType, path);
-    } catch (wrapped) {
-      const errorObj = wrapped instanceof Error ? wrapped : new Error(String(wrapped));
-      setFatalError(errorObj);
-      throw errorObj;
-    }
-  };
+  const { user, authReady, authLoading, handleSignIn, handleSignOut, songs, historyItems, settings,
+    loading, globalError, setGlobalError, refresh } = useStudio();
+  const { audioRef, activeSongNumber, isPlaying, currentTime, duration, setIsPlaying, setCurrentTime,
+    setDuration, handleTogglePlay, handleSeek, handleDownloadSingle } = useStudioAudio(setGlobalError, Boolean(user));
+  const { generatingNumbers, handleGenerateSong, handleAddNewSong, handleAddBatchSongs, handleApproveLyric,
+    handleApproveTake, handleChooseTake, handleSaveEdit, handleChangeAdminFeeling, handleToggleArchive, handleSaveSettings } =
+    useSongActions(songs, refresh, setGlobalError);
 
   // UI state
   const [activeTab, setActiveTab] = useState<ActiveTab>("library");
@@ -170,7 +70,6 @@ export default function App() {
   const [selectedSongIds, setSelectedSongIds] = useState<Set<string>>(new Set());
 
   // Generation state
-  const [generatingNumbers, setGeneratingNumbers] = useState<Set<number>>(new Set());
   const [isBatchRunning, setIsBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number }>({
     done: 0,
@@ -178,232 +77,8 @@ export default function App() {
   });
   const cancelBatchRef = useRef(false);
 
-  // Audio player state
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [activeSongNumber, setActiveSongNumber] = useState<number | null>(null);
-  const [activeTrackKey, setActiveTrackKey] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
   const [downloadingZip, setDownloadingZip] = useState(false);
   const [zipProgress, setZipProgress] = useState<string | null>(null);
-
-  const migrationCheckedRef = useRef(false);
-
-  // Listen to Firebase Google Auth state & refresh token
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (nextUser) => {
-      setUser(nextUser);
-      setAuthReady(true);
-      if (nextUser) {
-        const token = await nextUser.getIdToken();
-        setIdToken(token);
-      } else {
-        setIdToken("");
-        setSongs([]);
-        setHistoryItems([]);
-        setLoading(false);
-        migrationCheckedRef.current = false;
-      }
-    });
-    return () => unsub();
-  }, []);
-
-  // 1. Subscribe to /settings/app_settings
-  useEffect(() => {
-    if (!authReady || !user) return;
-    const settingsDocRef = doc(db, "settings", "app_settings");
-
-    const unsub = onSnapshot(settingsDocRef, async (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data() as Partial<StudioSettings>;
-        setSettings({
-          feelings: Array.isArray(data.feelings) && data.feelings.length > 0
-            ? data.feelings
-            : DEFAULT_STUDIO_SETTINGS.feelings,
-          lines_per_song: typeof data.lines_per_song === "number" ? data.lines_per_song : 6,
-          max_words_per_line:
-            typeof data.max_words_per_line === "number" ? data.max_words_per_line : 5,
-          forbidden_words: Array.isArray(data.forbidden_words)
-            ? data.forbidden_words
-            : DEFAULT_STUDIO_SETTINGS.forbidden_words,
-          block_substrings: data.block_substrings !== false,
-          no_numbers_prices_brands: data.no_numbers_prices_brands !== false,
-          default_model: data.default_model || "lyria-3-clip-preview",
-          target_length: typeof data.target_length === "number" ? data.target_length : 30,
-          updated_at: data.updated_at || new Date().toISOString(),
-          ownerId: data.ownerId || user.uid,
-        });
-      } else {
-        // Initialize default settings doc
-        const initSettings: StudioSettings = {
-          ...DEFAULT_STUDIO_SETTINGS,
-          ownerId: user.uid,
-          updated_at: new Date().toISOString(),
-        };
-        await setDoc(settingsDocRef, initSettings).catch(() => {});
-      }
-    });
-
-    return () => unsub();
-  }, [authReady, user]);
-
-  // 2. Subscribe to /song_history
-  useEffect(() => {
-    if (!authReady || !user) return;
-    const isStudioAdmin = user.email === "contact@tenten.ma" && user.emailVerified;
-    const historyQuery = isStudioAdmin
-      ? collection(db, "song_history")
-      : query(collection(db, "song_history"), where("ownerId", "==", user.uid));
-
-    const unsub = onSnapshot(historyQuery, (snapshot) => {
-      const items: SongHistoryItem[] = [];
-      snapshot.forEach((snap) => {
-        items.push(snap.data() as SongHistoryItem);
-      });
-      // Sort newest first
-      items.sort(
-        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-      );
-      setHistoryItems(items);
-    });
-
-    return () => unsub();
-  }, [authReady, user]);
-
-  // 3. Subscribe to /songs & run migration for songs 1–20 if needed
-  useEffect(() => {
-    if (!authReady || !user) return;
-    setLoading(true);
-
-    const isStudioAdmin = user.email === "contact@tenten.ma" && user.emailVerified;
-    const songsQuery = isStudioAdmin
-      ? collection(db, "songs")
-      : query(collection(db, "songs"), where("ownerId", "==", user.uid));
-
-    const unsubscribe = onSnapshot(
-      songsQuery,
-      async (snapshot) => {
-        const loadedSongs: SongState[] = [];
-        snapshot.forEach((docSnap) => {
-          const raw = docSnap.data() as any;
-          const songId = raw.id || docSnap.id;
-          const songNumber = typeof raw.number === "number" ? raw.number : Number(docSnap.id) || 1;
-
-          loadedSongs.push({
-            id: songId,
-            number: songNumber,
-            title: raw.title || "أغنية مغربية",
-            lines: Array.isArray(raw.lines) ? raw.lines : [],
-            admin_feeling: raw.admin_feeling || "family_evening",
-            feeling_key: raw.feeling_key || "family_song",
-            theme: raw.theme || "Family moment",
-            mood: raw.mood || "Warm and emotional",
-            tempo_bpm: typeof raw.tempo_bpm === "number" ? raw.tempo_bpm : 80,
-            instruments: raw.instruments || "Acoustic oud, guitar",
-            vocal_tone: raw.vocal_tone || "Solo warm vocal",
-            status: (raw.status as SongStatus) || (raw.storage_path ? "ready" : "draft"),
-            best_take_id: raw.best_take_id || (raw.storage_path ? "take_1" : null),
-            created_at: raw.created_at || new Date().toISOString(),
-            updated_at: raw.updated_at || new Date().toISOString(),
-            archived: Boolean(raw.archived),
-            ownerId: raw.ownerId || user.uid,
-            // Resolved active playback fields
-            download_url: raw.download_url || null,
-            storage_path: raw.storage_path || null,
-            duration_seconds: raw.duration_seconds || null,
-            lufs: raw.lufs || null,
-            true_peak_db: raw.true_peak_db || null,
-            file_name: raw.file_name || formatSongFilename(songNumber, raw.feeling_key || "song", "wav"),
-            words_heard_pct: raw.words_heard_pct || null,
-            transcribed_text: raw.transcribed_text || null,
-            missing_words: Array.isArray(raw.missing_words) ? raw.missing_words : [],
-            extra_words: Array.isArray(raw.extra_words) ? raw.extra_words : [],
-            voice_start_seconds: raw.voice_start_seconds || null,
-            voice_end_seconds: raw.voice_end_seconds || null,
-            takes: Array.isArray(raw.takes) ? raw.takes : [],
-          });
-        });
-
-        // Migration Check: If empty or missing legacy 1-20, seed them with 0 data loss
-        if (!migrationCheckedRef.current) {
-          migrationCheckedRef.current = true;
-          const existingMap = new Map<number, any>();
-          loadedSongs.forEach((s) => existingMap.set(s.number, s));
-
-          const needsMigration = INITIAL_SONGS.filter((spec) => !existingMap.has(spec.number));
-
-          if (needsMigration.length > 0) {
-            try {
-              const batch = writeBatch(db);
-              const now = new Date().toISOString();
-
-              for (const spec of needsMigration) {
-                const docId = String(spec.number);
-                const songRef = doc(db, "songs", docId);
-                const initialSong: SongState = {
-                  id: docId,
-                  number: spec.number,
-                  title: spec.title,
-                  lines: spec.lines,
-                  admin_feeling: spec.admin_feeling,
-                  feeling_key: spec.feeling_key,
-                  theme: spec.theme,
-                  mood: spec.mood,
-                  tempo_bpm: spec.tempo_bpm,
-                  instruments: spec.instruments,
-                  vocal_tone: spec.vocal_tone,
-                  status: "lyric_approved",
-                  best_take_id: null,
-                  created_at: now,
-                  updated_at: now,
-                  archived: false,
-                  ownerId: user.uid,
-                  file_name: formatSongFilename(spec.number, spec.feeling_key, "wav"),
-                  takes: [],
-                };
-                batch.set(songRef, initialSong);
-
-                // Add to song_history with action "migrated"
-                const historyRef = doc(db, "song_history", `hist_${docId}_init`);
-                const historyItem: SongHistoryItem = {
-                  id: `hist_${docId}_init`,
-                  song_id: docId,
-                  song_number: spec.number,
-                  title: spec.title,
-                  lines: spec.lines,
-                  admin_feeling: spec.admin_feeling,
-                  action: "migrated",
-                  timestamp: now,
-                  ownerId: user.uid,
-                };
-                batch.set(historyRef, historyItem);
-              }
-              await batch.commit();
-              return;
-            } catch (err) {
-              reportFirestoreError(err, OperationType.WRITE, "songs");
-            }
-          }
-        }
-
-        // Sort songs by display number (1, 2, 3...)
-        loadedSongs.sort((a, b) => a.number - b.number);
-        setSongs(loadedSongs);
-        setLoading(false);
-      },
-      (error) => {
-        setLoading(false);
-        try {
-          reportFirestoreError(error, OperationType.LIST, "songs");
-        } catch {
-          // Handled
-        }
-      }
-    );
-
-    return () => unsubscribe();
-  }, [authReady, user]);
 
   // Filtered and searched songs
   const filteredSongs = useMemo(() => {
@@ -411,10 +86,10 @@ export default function App() {
     let result = songs.filter((song) => {
       // Archived filter
       if (statusFilter === "archived") {
-        if (!song.archived) return false;
+        if (filterStatus(song) !== "archived") return false;
       } else {
-        if (song.archived) return false;
-        if (statusFilter !== "all" && song.status !== statusFilter) return false;
+        if (filterStatus(song) === "archived") return false;
+        if (statusFilter !== "all" && filterStatus(song) !== statusFilter) return false;
       }
 
       // Feeling filter
@@ -457,36 +132,17 @@ export default function App() {
     return result;
   }, [songs, statusFilter, feelingFilter, dateFilter, searchQuery]);
 
-  // Dynamic counts for library summary (no hardcoded "20")
-  const activeSongs = useMemo(() => songs.filter((s) => !s.archived), [songs]);
-  const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = {
-      all: activeSongs.length,
-      draft: 0,
-      lyric_approved: 0,
-      generating: 0,
-      ready: 0,
-      approved: 0,
-      failed: 0,
-      needs_person: 0,
-      archived: songs.filter((s) => s.archived).length,
-    };
-    activeSongs.forEach((s) => {
-      if (typeof counts[s.status] === "number") {
-        counts[s.status] += 1;
-      }
-    });
-    return counts;
-  }, [songs, activeSongs]);
+  const activeSongs = useMemo(() => songs.filter((song) => filterStatus(song) !== "archived"), [songs]);
+  const statusCounts = useMemo(() => countStatuses(songs), [songs]);
 
   // Counts per feeling
   const feelingCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
+    const counts: Record<string, number> = Object.create(null);
     for (const f of settings.feelings) {
       counts[f] = 0;
     }
     activeSongs.forEach((s) => {
-      if (typeof counts[s.admin_feeling] === "number") {
+      if (Object.hasOwn(counts, s.admin_feeling)) {
         counts[s.admin_feeling] += 1;
       } else {
         counts[s.admin_feeling] = 1;
@@ -521,96 +177,6 @@ export default function App() {
     }));
   }, [filteredSongs]);
 
-  const handleSignIn = async () => {
-    setAuthLoading(true);
-    setGlobalError(null);
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Google sign-in failed");
-    } finally {
-      setAuthLoading(false);
-    }
-  };
-
-  const handleSignOut = async () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    setIsPlaying(false);
-    setActiveSongNumber(null);
-    setActiveTrackKey(null);
-    await signOut(auth);
-  };
-
-  // Audio Playback
-  const resolveDownloadUrl = async (song: SongState): Promise<string> => {
-    if (song.download_url) return song.download_url;
-    if (!song.storage_path) {
-      throw new Error(`No audio recorded for #${song.number}`);
-    }
-    return await getDownloadURL(ref(storage, song.storage_path));
-  };
-
-  const handleTogglePlay = async (song: SongState, take?: SongTake) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    let targetUrl: string | null = null;
-    let trackDuration = song.duration_seconds || 30;
-    const trackKey = take ? `${song.id}-${take.id}` : `${song.id}-main`;
-
-    if (take) {
-      targetUrl = take.download_url || null;
-      trackDuration = take.duration_seconds || trackDuration;
-      if (!targetUrl && take.storage_path) {
-        try {
-          targetUrl = await getDownloadURL(ref(storage, take.storage_path));
-        } catch {
-          // Ignored
-        }
-      }
-    } else {
-      if (!song.download_url && !song.storage_path) return;
-      try {
-        targetUrl = await resolveDownloadUrl(song);
-      } catch (err) {
-        setGlobalError(err instanceof Error ? err.message : "Failed to resolve audio URL");
-        return;
-      }
-    }
-
-    if (!targetUrl) return;
-
-    if (activeTrackKey === trackKey && activeSongNumber === song.number) {
-      if (audio.paused) {
-        void audio.play();
-      } else {
-        audio.pause();
-      }
-      return;
-    }
-
-    try {
-      setActiveSongNumber(song.number);
-      setActiveTrackKey(trackKey);
-      setCurrentTime(0);
-      setDuration(trackDuration);
-      audio.src = targetUrl;
-      audio.load();
-      void audio.play();
-    } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : "Playback failed");
-    }
-  };
-
-  const handleSeek = (time: number) => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = time;
-    setCurrentTime(time);
-  };
-
   const playAdjacentReady = (dir: -1 | 1) => {
     const readyList = filteredSongs.filter((s) => s.download_url || s.storage_path);
     if (readyList.length === 0) return;
@@ -618,493 +184,6 @@ export default function App() {
     const nextIdx =
       currentIdx === -1 ? 0 : (currentIdx + dir + readyList.length) % readyList.length;
     void handleTogglePlay(readyList[nextIdx]);
-  };
-
-  const fetchStorageWavBlob = async (song: SongState): Promise<Blob> => {
-    if (!song.storage_path) {
-      throw new Error(`Missing audio path for #${song.number}`);
-    }
-    try {
-      return await getBlob(ref(storage, song.storage_path));
-    } catch {
-      const url = await resolveDownloadUrl(song);
-      const proxyRes = await fetch("/api/storage-proxy", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({ url }),
-      });
-      if (!proxyRes.ok) {
-        throw new Error(`Failed to download audio for #${song.number}`);
-      }
-      return await proxyRes.blob();
-    }
-  };
-
-  const handleDownloadSingle = async (song: SongState, take?: SongTake) => {
-    if (!user) return;
-    setGlobalError(null);
-    try {
-      let blob: Blob;
-      let downloadFileName = formatSongFilename(song.number, song.feeling_key, "wav");
-
-      if (take && take.storage_path) {
-        try {
-          blob = await getBlob(ref(storage, take.storage_path));
-        } catch {
-          const url =
-            take.download_url || (await getDownloadURL(ref(storage, take.storage_path)));
-          const res = await fetch("/api/storage-proxy", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${idToken}`,
-            },
-            body: JSON.stringify({ url }),
-          });
-          blob = await res.blob();
-        }
-        downloadFileName = `${song.number}-${song.feeling_key}-take-${take.take_number}.wav`;
-      } else {
-        blob = await fetchStorageWavBlob(song);
-      }
-
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = downloadFileName;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 30_000);
-    } catch (err) {
-      setGlobalError(err instanceof Error ? err.message : `Failed to download #${song.number}`);
-    }
-  };
-
-  // Generation of audio for a song
-  const handleGenerateSong = async (
-    songNumber: number
-  ): Promise<{ ok: boolean; stopBatch?: boolean }> => {
-    if (!user) {
-      setGlobalError("Please sign in first.");
-      return { ok: false, stopBatch: true };
-    }
-
-    const song = songs.find((s) => s.number === songNumber);
-    if (!song) return { ok: false };
-
-    if (song.status === "draft") {
-      setGlobalError(
-        `Song #${songNumber} is still a draft. Please click "Approve Lyric" before generating audio.`
-      );
-      return { ok: false };
-    }
-
-    const lyricCheck = validateLyrics(song.lines, settings);
-    if (!lyricCheck.valid) {
-      setGlobalError(
-        `Cannot generate #${songNumber} until lyric rule warnings are resolved: ${lyricCheck.errors.join("; ")}`
-      );
-      return { ok: false };
-    }
-
-    setGlobalError(null);
-    setGeneratingNumbers((prev) => new Set(prev).add(songNumber));
-
-    // Update status to "generating"
-    await updateDoc(doc(db, "songs", song.id), {
-      status: "generating",
-      updated_at: new Date().toISOString(),
-    }).catch(() => {});
-
-    try {
-      const res = await fetch(`/api/songs/${songNumber}/generate`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          feeling_key: song.feeling_key,
-          admin_feeling: song.admin_feeling,
-          title: song.title,
-          theme: song.theme,
-          lines: song.lines,
-          mood: song.mood,
-          tempo_bpm: song.tempo_bpm,
-          instruments: song.instruments,
-          vocal_tone: song.vocal_tone,
-          model: settings.default_model || "lyria-3-clip-preview",
-        }),
-      });
-
-      if (!res.ok) {
-        const errJson = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(errJson.error || `Audio generation failed (${res.status})`);
-      }
-
-      const wavBlob = await res.blob();
-      const durationSeconds = Number(res.headers.get("X-Duration-Seconds") || "30");
-      const lufs = Number(res.headers.get("X-Lufs") || "-14");
-      const truePeakDb = Number(res.headers.get("X-True-Peak-Db") || "-1");
-      const modelUsed = res.headers.get("X-Model-Used") || settings.default_model;
-      const qualityReport = decodeQualityReportHeader(res.headers.get("X-Quality-Report"));
-
-      const existingTakes = song.takes || [];
-      const takeNumber = existingTakes.length + 1;
-      const takeId = `take_${takeNumber}_${Date.now()}`;
-      const takeStoragePath = `songs/takes/${formatSongFilename(song.number, song.feeling_key, "wav")}-take-${takeNumber}.wav`;
-
-      // 1. Upload take WAV to Cloud Storage
-      const takeRef = ref(storage, takeStoragePath);
-      await uploadBytes(takeRef, wavBlob, { contentType: "audio/wav" });
-      const takeDownloadUrl = await getDownloadURL(takeRef);
-
-      // 2. Create Take document in subcollection /songs/{songId}/takes/{takeId}
-      const newTake: SongTake = {
-        id: takeId,
-        take_number: takeNumber,
-        model: modelUsed,
-        storage_path: takeStoragePath,
-        download_url: takeDownloadUrl,
-        duration_seconds: durationSeconds,
-        lufs,
-        true_peak_db: truePeakDb,
-        words_heard_pct: qualityReport?.words_heard_pct ?? null,
-        missing_words: qualityReport?.missing_words ?? [],
-        extra_words: qualityReport?.extra_words ?? [],
-        voice_start: qualityReport?.voice_start_seconds ?? null,
-        voice_end: qualityReport?.voice_end_seconds ?? null,
-        cost_estimate: 0.08,
-        created_at: new Date().toISOString(),
-        status: "ready",
-        ownerId: user.uid,
-        tempo_bpm: song.tempo_bpm,
-      };
-
-      await setDoc(doc(db, "songs", song.id, "takes", takeId), newTake);
-
-      // 3. Promote to primary best take if first take or if no best take approved yet
-      const mainStoragePath = `songs/${formatSongFilename(song.number, song.feeling_key, "wav")}`;
-      const isFirstTake = existingTakes.length === 0;
-
-      if (isFirstTake || !song.best_take_id) {
-        await uploadBytes(ref(storage, mainStoragePath), wavBlob, {
-          contentType: "audio/wav",
-        });
-      }
-
-      const mainUrl = isFirstTake
-        ? await getDownloadURL(ref(storage, mainStoragePath))
-        : song.download_url;
-
-      const updatedTakes = [...existingTakes, newTake].slice(-8);
-
-      await updateDoc(doc(db, "songs", song.id), {
-        status: "ready",
-        best_take_id: isFirstTake ? takeId : song.best_take_id || takeId,
-        duration_seconds: durationSeconds,
-        lufs,
-        true_peak_db: truePeakDb,
-        download_url: mainUrl || takeDownloadUrl,
-        storage_path: isFirstTake ? mainStoragePath : song.storage_path || takeStoragePath,
-        words_heard_pct: qualityReport?.words_heard_pct ?? null,
-        transcribed_text: qualityReport?.transcribed_text ?? null,
-        missing_words: qualityReport?.missing_words ?? [],
-        extra_words: qualityReport?.extra_words ?? [],
-        voice_start_seconds: qualityReport?.voice_start_seconds ?? null,
-        voice_end_seconds: qualityReport?.voice_end_seconds ?? null,
-        model_used: modelUsed,
-        takes: updatedTakes,
-        updated_at: new Date().toISOString(),
-      });
-
-      return { ok: true };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Generation failed";
-      setGlobalError(`Error on #${songNumber}: ${msg}`);
-      await updateDoc(doc(db, "songs", song.id), {
-        status: "failed",
-        updated_at: new Date().toISOString(),
-      }).catch(() => {});
-      return { ok: false };
-    } finally {
-      setGeneratingNumbers((prev) => {
-        const next = new Set(prev);
-        next.delete(songNumber);
-        return next;
-      });
-    }
-  };
-
-  // Create single song from "New Song" modal
-  const handleAddNewSong = async (newSong: {
-    title: string;
-    lines: string[];
-    admin_feeling: string;
-    theme: string;
-    mood: string;
-    tempo_bpm: number;
-    instruments: string;
-    vocal_tone: string;
-    feeling_key: string;
-    isApproved: boolean;
-  }) => {
-    if (!user) return;
-    const nextNumber =
-      songs.length > 0 ? Math.max(...songs.map((s) => s.number)) + 1 : 1;
-    const songId = `song_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    const now = new Date().toISOString();
-
-    const songDoc: SongState = {
-      id: songId,
-      number: nextNumber,
-      title: newSong.title,
-      lines: newSong.lines,
-      admin_feeling: newSong.admin_feeling,
-      feeling_key: newSong.feeling_key,
-      theme: newSong.theme,
-      mood: newSong.mood,
-      tempo_bpm: newSong.tempo_bpm,
-      instruments: newSong.instruments,
-      vocal_tone: newSong.vocal_tone,
-      status: newSong.isApproved ? "lyric_approved" : "draft",
-      best_take_id: null,
-      created_at: now,
-      updated_at: now,
-      archived: false,
-      ownerId: user.uid,
-      file_name: formatSongFilename(nextNumber, newSong.feeling_key, "wav"),
-      takes: [],
-    };
-
-    const batch = writeBatch(db);
-    batch.set(doc(db, "songs", songId), songDoc);
-
-    const historyId = `hist_${songId}_created`;
-    const histItem: SongHistoryItem = {
-      id: historyId,
-      song_id: songId,
-      song_number: nextNumber,
-      title: newSong.title,
-      lines: newSong.lines,
-      admin_feeling: newSong.admin_feeling,
-      action: newSong.isApproved ? "lyric_approved" : "created",
-      timestamp: now,
-      ownerId: user.uid,
-    };
-    batch.set(doc(db, "song_history", historyId), histItem);
-
-    await batch.commit();
-  };
-
-  // Add batch songs from "Batch Generator" modal
-  const handleAddBatchSongs = async (
-    newSongs: Array<{
-      title: string;
-      lines: string[];
-      admin_feeling: string;
-      theme: string;
-      mood: string;
-      tempo_bpm: number;
-      instruments: string;
-      vocal_tone: string;
-      feeling_key: string;
-      isApproved: boolean;
-    }>
-  ) => {
-    if (!user || newSongs.length === 0) return;
-    let nextNum = songs.length > 0 ? Math.max(...songs.map((s) => s.number)) + 1 : 1;
-    const now = new Date().toISOString();
-    const batch = writeBatch(db);
-
-    for (const s of newSongs) {
-      const songId = `song_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-      const songDoc: SongState = {
-        id: songId,
-        number: nextNum,
-        title: s.title,
-        lines: s.lines,
-        admin_feeling: s.admin_feeling,
-        feeling_key: s.feeling_key,
-        theme: s.theme,
-        mood: s.mood,
-        tempo_bpm: s.tempo_bpm,
-        instruments: s.instruments,
-        vocal_tone: s.vocal_tone,
-        status: s.isApproved ? "lyric_approved" : "draft",
-        best_take_id: null,
-        created_at: now,
-        updated_at: now,
-        archived: false,
-        ownerId: user.uid,
-        file_name: formatSongFilename(nextNum, s.feeling_key, "wav"),
-        takes: [],
-      };
-      batch.set(doc(db, "songs", songId), songDoc);
-
-      const histId = `hist_${songId}_created`;
-      const histItem: SongHistoryItem = {
-        id: histId,
-        song_id: songId,
-        song_number: nextNum,
-        title: s.title,
-        lines: s.lines,
-        admin_feeling: s.admin_feeling,
-        action: s.isApproved ? "lyric_approved" : "created",
-        timestamp: now,
-        ownerId: user.uid,
-      };
-      batch.set(doc(db, "song_history", histId), histItem);
-
-      nextNum += 1;
-    }
-
-    await batch.commit();
-  };
-
-  // Approve Lyric action (draft -> lyric_approved)
-  const handleApproveLyric = async (songId: string) => {
-    if (!user) return;
-    const song = songs.find((s) => s.id === songId);
-    if (!song) return;
-
-    const now = new Date().toISOString();
-    const batch = writeBatch(db);
-
-    batch.update(doc(db, "songs", songId), {
-      status: "lyric_approved",
-      updated_at: now,
-    });
-
-    const histId = `hist_${songId}_${Date.now()}`;
-    const histItem: SongHistoryItem = {
-      id: histId,
-      song_id: songId,
-      song_number: song.number,
-      title: song.title,
-      lines: song.lines,
-      admin_feeling: song.admin_feeling,
-      action: "lyric_approved",
-      timestamp: now,
-      ownerId: user.uid,
-    };
-    batch.set(doc(db, "song_history", histId), histItem);
-
-    await batch.commit();
-  };
-
-  // Approve Take as best_take_id (marks status "approved")
-  const handleApproveTake = async (songId: string, takeId: string) => {
-    if (!user) return;
-    const song = songs.find((s) => s.id === songId);
-    if (!song) return;
-
-    const targetTake = (song.takes || []).find((t) => t.id === takeId);
-    const now = new Date().toISOString();
-
-    await updateDoc(doc(db, "songs", songId), {
-      best_take_id: takeId,
-      status: "approved",
-      download_url: targetTake?.download_url || song.download_url,
-      storage_path: targetTake?.storage_path || song.storage_path,
-      duration_seconds: targetTake?.duration_seconds ?? song.duration_seconds,
-      lufs: targetTake?.lufs ?? song.lufs,
-      true_peak_db: targetTake?.true_peak_db ?? song.true_peak_db,
-      words_heard_pct: targetTake?.words_heard_pct ?? song.words_heard_pct,
-      updated_at: now,
-    });
-  };
-
-  // Edit lyrics (instantly saves to Firestore and appends to song_history)
-  const handleSaveEdit = async (
-    songId: string,
-    updates: {
-      title: string;
-      lines: string[];
-      mood: string;
-      tempo_bpm: number;
-      instruments: string;
-      admin_feeling: string;
-    }
-  ) => {
-    if (!user) return;
-    const song = songs.find((s) => s.id === songId);
-    if (!song) return;
-
-    const now = new Date().toISOString();
-    const batch = writeBatch(db);
-
-    batch.update(doc(db, "songs", songId), {
-      title: updates.title.trim().slice(0, 120),
-      lines: updates.lines.map((l) => l.trim().slice(0, 240)),
-      mood: updates.mood.trim().slice(0, 80),
-      tempo_bpm: Math.min(100, Math.max(70, Math.round(updates.tempo_bpm))),
-      instruments: updates.instruments.trim().slice(0, 300),
-      admin_feeling: updates.admin_feeling,
-      status: "draft", // Lyric edited -> back to draft for fresh review
-      updated_at: now,
-    });
-
-    const histId = `hist_${songId}_${Date.now()}`;
-    const histItem: SongHistoryItem = {
-      id: histId,
-      song_id: songId,
-      song_number: song.number,
-      title: updates.title.trim(),
-      lines: updates.lines,
-      admin_feeling: updates.admin_feeling,
-      action: "edited",
-      timestamp: now,
-      ownerId: user.uid,
-    };
-    batch.set(doc(db, "song_history", histId), histItem);
-
-    await batch.commit();
-  };
-
-  // Change admin_feeling dropdown
-  const handleChangeAdminFeeling = async (songId: string, adminFeeling: string) => {
-    if (!user) return;
-    await updateDoc(doc(db, "songs", songId), {
-      admin_feeling: adminFeeling,
-      updated_at: new Date().toISOString(),
-    });
-  };
-
-  // Archive / Restore song
-  const handleToggleArchive = async (songId: string, archive: boolean) => {
-    if (!user) return;
-    const song = songs.find((s) => s.id === songId);
-    if (!song) return;
-
-    const now = new Date().toISOString();
-    const batch = writeBatch(db);
-
-    batch.update(doc(db, "songs", songId), {
-      archived: archive,
-      status: archive ? "archived" : song.best_take_id ? "ready" : "draft",
-      updated_at: now,
-    });
-
-    const histId = `hist_${songId}_${Date.now()}`;
-    const histItem: SongHistoryItem = {
-      id: histId,
-      song_id: songId,
-      song_number: song.number,
-      title: song.title,
-      lines: song.lines,
-      admin_feeling: song.admin_feeling,
-      action: archive ? "archived" : "restored",
-      timestamp: now,
-      ownerId: user.uid,
-    };
-    batch.set(doc(db, "song_history", histId), histItem);
-
-    await batch.commit();
   };
 
   // Multi-selection handlers
@@ -1126,18 +205,16 @@ export default function App() {
   };
 
   // Multi-selection: Generate selected
-  const handleGenerateSelected = async () => {
+  const handleGenerateSelected = async (repair = false) => {
     const selected = songs.filter(
       (s) =>
-        selectedSongIds.has(s.id) &&
-        (s.status === "lyric_approved" || s.status === "ready" || s.status === "approved" || s.status === "failed") &&
-        validateLyrics(s.lines, settings).valid
+        !s.archived && (repair ? s.status === "failed" || s.status === "generating" : selectedSongIds.has(s.id)) &&
+        (repair || s.status === "lyric_approved" || s.status === "ready" || s.status === "approved" || s.status === "failed") &&
+        (repair || validateLyrics(s.lines, settings).valid)
     );
 
     if (selected.length === 0) {
-      setGlobalError(
-        "None of the selected songs are eligible for generation (must be lyric_approved or later with zero rule errors)."
-      );
+      setGlobalError(repair ? "There are no failed songs to repair." : "Select songs with approved lyrics and no rule errors.");
       return;
     }
 
@@ -1148,7 +225,7 @@ export default function App() {
     let completed = 0;
     for (const target of selected) {
       if (cancelBatchRef.current) break;
-      const res = await handleGenerateSong(target.number);
+      const res = await handleGenerateSong(target.number, repair);
       if (res.stopBatch) break;
       completed += 1;
       setBatchProgress({ done: completed, total: selected.length });
@@ -1157,37 +234,12 @@ export default function App() {
     setIsBatchRunning(false);
   };
 
-  // Multi-selection: Archive selected
+
   const handleArchiveSelected = async () => {
-    if (!user || selectedSongIds.size === 0) return;
-    const now = new Date().toISOString();
-    const batch = writeBatch(db);
-
-    for (const songId of selectedSongIds) {
-      const song = songs.find((s) => s.id === songId);
-      if (!song) continue;
-
-      batch.update(doc(db, "songs", songId), {
-        archived: true,
-        status: "archived",
-        updated_at: now,
-      });
-
-      const histId = `hist_${songId}_${Date.now()}`;
-      batch.set(doc(db, "song_history", histId), {
-        id: histId,
-        song_id: songId,
-        song_number: song.number,
-        title: song.title,
-        lines: song.lines,
-        admin_feeling: song.admin_feeling,
-        action: "archived",
-        timestamp: now,
-        ownerId: user.uid,
-      });
+    for (const id of selectedSongIds) {
+      try { await handleToggleArchive(id, true); }
+      catch { break; }
     }
-
-    await batch.commit();
     setSelectedSongIds(new Set());
   };
 
@@ -1207,6 +259,7 @@ export default function App() {
     setGlobalError(null);
 
     try {
+      const { default: JSZip } = await import("jszip");
       const zip = new JSZip();
 
       // Build songs.json manifest with new fields: id, admin_feeling, words_heard_pct
@@ -1239,9 +292,9 @@ export default function App() {
         const chunk = readyToExport.slice(i, i + concurrency);
         await Promise.all(
           chunk.map(async (song) => {
-            const wavBlob = await fetchStorageWavBlob(song);
+            const wavBlob = await studioAudio(song.storage_path);
             const buf = await wavBlob.arrayBuffer();
-            const fileName = formatSongFilename(song.number, song.feeling_key, "wav");
+            const fileName = song.file_name ?? formatSongFilename(song.number, song.feeling_key, "wav");
             zip.file(fileName, buf, { compression: "STORE" });
             fetched += 1;
             setZipProgress(`${fetched}/${readyToExport.length}`);
@@ -1251,14 +304,7 @@ export default function App() {
 
       setZipProgress("Building ZIP…");
       const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${zipTitle}.zip`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      saveBlob(blob, zipTitle + ".zip");
     } catch (err) {
       setGlobalError(err instanceof Error ? err.message : "Failed to package ZIP archive");
     } finally {
@@ -1266,15 +312,6 @@ export default function App() {
       setZipProgress(null);
     }
   };
-
-  const handleSaveSettings = async (updated: StudioSettings) => {
-    if (!user) return;
-    await setDoc(doc(db, "settings", "app_settings"), updated);
-  };
-
-  if (fatalError) {
-    throw fatalError;
-  }
 
   if (!authReady) {
     return (
@@ -1289,7 +326,7 @@ export default function App() {
     return (
       <div className="flex min-h-screen flex-col bg-[#F8F8F6] text-[#141413]">
         <header className="border-b border-[#E5E4DF] bg-white">
-          <div className="mx-auto flex max-w-[1200px] items-center justify-between gap-8 px-6 py-3.5">
+          <div className="mx-auto flex max-w-[1200px] items-center justify-between gap-3 px-4 py-3.5 sm:gap-8 sm:px-6">
             <span className="text-lg font-bold tracking-tight text-[#141413]">
               Darija Song Studio
             </span>
@@ -1346,6 +383,7 @@ export default function App() {
     <div className="min-h-screen bg-[#F8F8F6] text-[#141413]">
       {/* Hidden shared HTML5 audio element */}
       <audio
+        aria-label="Studio audio player"
         ref={audioRef}
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
@@ -1363,7 +401,7 @@ export default function App() {
 
       {/* Top Navigation Bar */}
       <header className="sticky top-0 z-30 border-b border-[#E5E4DF] bg-white/95 backdrop-blur-sm">
-        <div className="mx-auto flex max-w-[1240px] items-center justify-between gap-6 px-6 py-3">
+        <div className="mx-auto flex max-w-[1240px] flex-wrap items-center justify-between gap-2 px-4 py-3 sm:gap-6 sm:px-6">
           <div className="flex items-center gap-6">
             <a
               href="#top"
@@ -1371,7 +409,7 @@ export default function App() {
                 e.preventDefault();
                 setActiveTab("library");
               }}
-              className="text-lg font-bold tracking-tight text-[#141413] whitespace-nowrap shrink-0"
+              className="text-base font-bold tracking-tight text-[#141413] sm:text-lg"
             >
               Darija Song Studio
             </a>
@@ -1414,12 +452,13 @@ export default function App() {
           </div>
 
           {/* Creation & Action Buttons */}
-          <div className="flex items-center gap-2.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5">
             <button
               type="button"
               onClick={() => setIsHistoryDrawerOpen(true)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-[#D4D2CA] bg-white px-3 py-1.5 text-xs font-semibold text-[#57554F] hover:bg-[#F3F2EE]"
               title="View permanent lyric history"
+              aria-label={"History (" + historyItems.length + ")"}
             >
               <History className="h-3.5 w-3.5" />
               <span className="hidden sm:inline">History ({historyItems.length})</span>
@@ -1431,7 +470,7 @@ export default function App() {
               className="inline-flex items-center gap-1.5 rounded-lg border border-[#1B3B6F] bg-[#EFF6FF] px-3.5 py-1.5 text-xs font-semibold text-[#1B3B6F] hover:bg-[#DBEAFE]"
             >
               <Layers className="h-3.5 w-3.5" />
-              <span>Batch (1–20)</span>
+              <span>Batch</span>
             </button>
 
             <button
@@ -1445,9 +484,10 @@ export default function App() {
 
             <button
               type="button"
-              onClick={handleSignOut}
+              onClick={() => void handleSignOut().catch(() => setGlobalError("Could not sign out."))}
               className="rounded-lg p-1.5 text-[#706E67] hover:bg-[#F3F2EE] hover:text-[#141413]"
               title="Sign out"
+              aria-label="Sign out"
             >
               <LogOut className="h-4 w-4" />
             </button>
@@ -1490,6 +530,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => setGlobalError(null)}
+              aria-label="Dismiss error"
               className="text-xs font-medium underline"
             >
               Dismiss
@@ -1513,6 +554,8 @@ export default function App() {
                       ["lyric_approved", `Lyric Approved (${statusCounts.lyric_approved})`],
                       ["draft", `Drafts (${statusCounts.draft})`],
                       ["failed", `Failed (${statusCounts.failed})`],
+                      ["generating", `Generating (${statusCounts.generating})`],
+                      ["other", `Other (${statusCounts.other})`],
                       ["needs_person", `Needs Person (${statusCounts.needs_person})`],
                       ["archived", `Archived (${statusCounts.archived})`],
                     ] as const
@@ -1600,7 +643,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={handleGenerateSelected}
+                      onClick={() => void handleGenerateSelected()}
                       disabled={isBatchRunning}
                       className="inline-flex items-center gap-1.5 rounded-lg bg-[#1B3B6F] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#152E57] disabled:opacity-50"
                     >
@@ -1641,6 +684,7 @@ export default function App() {
                   type="search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
+                  aria-label="Search songs"
                   placeholder="Search by title, feeling, lyric..."
                   className="w-full rounded-lg border border-[#DCDAD2] bg-[#FAF9F6] py-1.5 pl-8 pr-3 text-xs text-[#141413] placeholder:text-[#8A877F] focus:border-[#1B3B6F] focus:bg-white focus:outline-none"
                 />
@@ -1667,16 +711,23 @@ export default function App() {
               </div>
             )}
 
+            {(statusCounts.failed > 0 || statusCounts.generating > 0) && (
+              <button type="button" disabled={isBatchRunning} onClick={() => void handleGenerateSelected(true)}
+                className="inline-flex items-center gap-2 rounded-lg border border-[#D4D2CA] bg-white px-3 py-2 text-xs font-semibold disabled:opacity-50">
+                <Wrench className="h-4 w-4" /> Fix all failed
+              </button>
+            )}
+
             {/* Song List */}
             <div className="overflow-hidden rounded-xl border border-[#E5E4DF] bg-white shadow-xs">
               {loading ? (
                 <div className="flex items-center justify-center gap-2 py-16 text-sm text-[#6E6C66]">
                   <Loader2 className="h-4 w-4 animate-spin text-[#1B3B6F]" />
-                  Loading songs from Firestore…
+                  Loading songs…
                 </div>
               ) : filteredSongs.length === 0 ? (
                 <div className="py-16 text-center text-sm text-[#6E6C66]">
-                  No songs match the current filter or search criteria.
+                  {songs.length ? "No songs match the current filters." : "Your library is empty. Create a song or open Settings to seed the default catalog."}
                 </div>
               ) : (
                 filteredSongs.map((song) => (
@@ -1702,6 +753,7 @@ export default function App() {
                     onSaveEdit={handleSaveEdit}
                     onApproveLyric={handleApproveLyric}
                     onApproveTake={handleApproveTake}
+                    onChooseTake={handleChooseTake}
                     onToggleArchive={handleToggleArchive}
                     onViewHistory={(num) => {
                       setHistorySongNumber(num);
@@ -1716,10 +768,10 @@ export default function App() {
 
         {/* TAB 2: SETTINGS SCREEN */}
         {activeTab === "settings" && (
-          <SettingsView
-            settings={settings}
-            onSaveSettings={handleSaveSettings}
-          />
+          <div className="space-y-5">
+            <SettingsView key={settings.updated_at} settings={settings} onSaveSettings={handleSaveSettings} />
+            <StudioAdministration refresh={refresh} />
+          </div>
         )}
 
         {/* TAB 3: EXPORT SCREEN */}
@@ -1804,9 +856,7 @@ export default function App() {
         isOpen={isNewSongModalOpen}
         onClose={() => setIsNewSongModalOpen(false)}
         settings={settings}
-        existingSongs={songs}
         onAddSong={handleAddNewSong}
-        idToken={idToken}
       />
 
       {/* Batch Generator Modal */}
@@ -1816,7 +866,6 @@ export default function App() {
         settings={settings}
         existingSongs={songs}
         onAddBatch={handleAddBatchSongs}
-        idToken={idToken}
       />
 
       {/* Song History Drawer */}

@@ -9,7 +9,7 @@
           "type": "string",
           "maxLength": 128,
           "pattern": "^[a-zA-Z0-9_\\-]+$",
-          "description": "Permanent unique identifier (e.g. song_1740000000000_a1b2 or legacy 1-20)."
+          "description": "Permanent Firestore document ID for a default or user-created song."
         },
         "number": {
           "type": "integer",
@@ -18,7 +18,7 @@
         "title": {
           "type": "string",
           "maxLength": 120,
-          "description": "Arabic script song title matching the start of line 1."
+          "description": "Short Arabic script title."
         },
         "lines": {
           "type": "array",
@@ -96,6 +96,10 @@
           "type": "string",
           "maxLength": 128,
           "description": "Firebase Auth UID of the creator/owner."
+        },
+        "file_name": {
+          "type": "string",
+          "description": "Original export filename, retained across migrations and takes."
         }
       },
       "required": [
@@ -138,7 +142,10 @@
           "description": "Lyria model ID used."
         },
         "storage_path": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "maxLength": 256,
           "description": "Cloud Storage object path."
         },
@@ -148,15 +155,24 @@
           "description": "Cloud Storage download URL."
         },
         "duration_seconds": {
-          "type": "number",
+          "type": [
+            "number",
+            "null"
+          ],
           "description": "WAV duration in seconds."
         },
         "lufs": {
-          "type": "number",
+          "type": [
+            "number",
+            "null"
+          ],
           "description": "Integrated loudness in LUFS (-14 target)."
         },
         "true_peak_db": {
-          "type": "number",
+          "type": [
+            "number",
+            "null"
+          ],
           "description": "True peak in dBTP (<= -1.0 target)."
         },
         "words_heard_pct": {
@@ -190,13 +206,45 @@
         },
         "status": {
           "type": "string",
-          "enum": ["ready", "failed"],
+          "enum": [
+            "generating",
+            "ready",
+            "failed"
+          ],
           "description": "Take status."
         },
         "ownerId": {
           "type": "string",
           "maxLength": 128,
           "description": "Firebase Auth UID."
+        },
+        "lyric_revision": {
+          "type": "string",
+          "description": "SHA-256 of the title and exact lyric lines at generation."
+        },
+        "raw_storage_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "is_approved": {
+          "type": "boolean"
+        },
+        "passed_all_checks": {
+          "type": "boolean"
+        },
+        "failure_reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "repeated_words": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -249,7 +297,16 @@
         },
         "action": {
           "type": "string",
-          "enum": ["created", "edited", "archived", "restored", "migrated", "lyric_approved"],
+          "enum": [
+            "created",
+            "edited",
+            "archived",
+            "restored",
+            "migrated",
+            "lyric_approved",
+            "imported",
+            "imported"
+          ],
           "description": "Action performed."
         },
         "timestamp": {
@@ -322,6 +379,12 @@
           "type": "string",
           "maxLength": 128,
           "description": "Firebase Auth UID."
+        },
+        "daily_budget_usd": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1000,
+          "description": "Maximum estimated Gemini spend per UTC day."
         }
       },
       "required": [

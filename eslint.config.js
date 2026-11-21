@@ -1,8 +1,13 @@
-import firebaseRulesPlugin from "@firebase/eslint-plugin-security-rules";
+import tseslint from "typescript-eslint";
 
-export default [
+export default tseslint.config(
+  { ignores: ["dist/**", "node_modules/**", ".firebase/**"] },
+  ...tseslint.configs.recommended,
   {
-    ignores: ["dist/**/*", "node_modules/**/*"],
+    files: ["**/*.ts", "**/*.tsx"],
+    rules: {
+      "@typescript-eslint/consistent-type-imports": "error",
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" }],
+    },
   },
-  firebaseRulesPlugin.configs["flat/recommended"],
-];
+);

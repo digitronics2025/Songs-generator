@@ -6,3 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+
+.firebase/
+.firebase-studio.generated.json
+*-debug.log

@@ -1,6 +1,6 @@
 {
-  "name": "Darija Reel Studio",
-  "description": "Generate and master 20 original Moroccan Darija family songs with Lyria for social Reels and Shorts, with lyric review and WAV ZIP export.",
+  "name": "Darija Song Studio",
+  "description": "Generate and master original Moroccan Darija family songs with Lyria for social Reels and Shorts, with lyric review and WAV ZIP export.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

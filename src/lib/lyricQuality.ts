@@ -185,13 +185,13 @@ export function normalizeArabicText(text: string): string {
   return text
     .normalize("NFKC")
     // Strip tashkeel & tatweel
-    .replace(/[\u064B-\u065F\u0670\u0640]/g, "")
+    .replace(/[\p{M}\p{Cf}\u0640]/gu, "")
     // Normalize alef forms, alef maqsura, teh marbuta
     .replace(/[أإآٱ]/g, "ا")
     .replace(/ى/g, "ي")
     .replace(/ة/g, "ه")
     // Strip punctuation
-    .replace(/[.,،؛؟!:"'()[\]{}\-_/\\~`@#$%^&*+=<>|]/g, " ")
+    .replace(/[\p{P}\p{S}]/gu, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
