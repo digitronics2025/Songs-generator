@@ -22,6 +22,7 @@ jobs:
           distribution: temurin
           java-version: 21
       - run: npm ci --ignore-scripts
+      - run: npm rebuild ffmpeg-static
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
