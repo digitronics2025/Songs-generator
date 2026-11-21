@@ -47,7 +47,7 @@ service cloud.firestore {
     function isValidLines(lines) {
       return lines is list
         && lines.size() >= 1
-        && lines.size() <= 8
+        && lines.size() <= 12
         && lines[0] is string && lines[0].size() <= 240
         && (lines.size() < 2 || (lines[1] is string && lines[1].size() <= 240))
         && (lines.size() < 3 || (lines[2] is string && lines[2].size() <= 240))
@@ -55,68 +55,94 @@ service cloud.firestore {
         && (lines.size() < 5 || (lines[4] is string && lines[4].size() <= 240))
         && (lines.size() < 6 || (lines[5] is string && lines[5].size() <= 240))
         && (lines.size() < 7 || (lines[6] is string && lines[6].size() <= 240))
-        && (lines.size() < 8 || (lines[7] is string && lines[7].size() <= 240));
-    }
-
-    function isValidAdminFeeling(val) {
-      return val is string
-        && val.size() <= 32
-        && val in [
-          'mothers_care',
-          'fathers_pride',
-          'family_evening',
-          'ramadan_ftour',
-          'eid_morning',
-          'calling_home',
-          'summer_at_home',
-          'new_home'
-        ];
+        && (lines.size() < 8 || (lines[7] is string && lines[7].size() <= 240))
+        && (lines.size() < 9 || (lines[8] is string && lines[8].size() <= 240))
+        && (lines.size() < 10 || (lines[9] is string && lines[9].size() <= 240));
     }
 
     function isValidSong(data) {
       return data.keys().hasAll([
-          'number', 'feeling_key', 'title', 'theme', 'lines', 'mood',
-          'tempo_bpm', 'instruments', 'vocal_tone', 'model_used', 'status',
-          'duration_seconds', 'lufs', 'true_peak_db', 'file_name',
-          'storage_path', 'generated_at', 'error_message', 'ownerId'
+          'id', 'number', 'title', 'lines', 'admin_feeling', 'feeling_key',
+          'theme', 'mood', 'tempo_bpm', 'instruments', 'vocal_tone',
+          'status', 'created_at', 'updated_at', 'archived', 'ownerId'
         ])
-        && data.keys().hasOnly([
-          'number', 'feeling_key', 'admin_feeling', 'title', 'theme', 'lines', 'mood',
-          'tempo_bpm', 'instruments', 'vocal_tone', 'model_used', 'status',
-          'duration_seconds', 'lufs', 'true_peak_db', 'file_name',
-          'storage_path', 'download_url', 'generated_at', 'error_message',
-          'words_heard_pct', 'transcribed_text', 'missing_words', 'extra_words',
-          'voice_start_seconds', 'voice_end_seconds', 'ownerId'
-        ])
-        && data.number is int && data.number >= 1 && data.number <= 20
-        && data.feeling_key is string && data.feeling_key.size() >= 1 && data.feeling_key.size() <= 64 && data.feeling_key.matches('^[a-z0-9_]+$')
-        && (!('admin_feeling' in data) || isValidAdminFeeling(data.admin_feeling))
+        && isValidId(data.id)
+        && data.number is int && data.number >= 1
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
-        && data.theme is string && data.theme.size() >= 1 && data.theme.size() <= 240
         && isValidLines(data.lines)
+        && data.admin_feeling is string && data.admin_feeling.size() >= 1 && data.admin_feeling.size() <= 64
+        && data.feeling_key is string && data.feeling_key.size() >= 1 && data.feeling_key.size() <= 64 && data.feeling_key.matches('^[a-z0-9_]+$')
+        && data.theme is string && data.theme.size() >= 1 && data.theme.size() <= 240
         && data.mood is string && data.mood.size() >= 1 && data.mood.size() <= 80
         && data.tempo_bpm is number && data.tempo_bpm >= 70 && data.tempo_bpm <= 100
         && data.instruments is string && data.instruments.size() >= 1 && data.instruments.size() <= 300
         && data.vocal_tone is string && data.vocal_tone.size() >= 1 && data.vocal_tone.size() <= 300
-        && isValidNullableString(data.model_used, 64)
-        && data.status in ['pending', 'generating', 'ready', 'error']
-        && isValidNullableNumber(data.duration_seconds)
-        && isValidNullableNumber(data.lufs)
-        && isValidNullableNumber(data.true_peak_db)
-        && data.file_name is string && data.file_name.size() >= 1 && data.file_name.size() <= 100
-        && isValidNullableString(data.storage_path, 200)
-        && (!('download_url' in data) || isValidNullableString(data.download_url, 1000))
-        && isValidNullableString(data.generated_at, 64)
-        && isValidNullableString(data.error_message, 1000)
-        && (!('words_heard_pct' in data) || data.words_heard_pct == null || (data.words_heard_pct is number && data.words_heard_pct >= 0 && data.words_heard_pct <= 100))
-        && (!('transcribed_text' in data) || isValidNullableString(data.transcribed_text, 2000))
-        && (!('missing_words' in data) || isValidBoundedWordList(data.missing_words, 50))
-        && (!('extra_words' in data) || isValidBoundedWordList(data.extra_words, 50))
-        && (!('voice_start_seconds' in data) || data.voice_start_seconds == null || (data.voice_start_seconds is number && data.voice_start_seconds >= 0 && data.voice_start_seconds <= 300))
-        && (!('voice_end_seconds' in data) || data.voice_end_seconds == null || (data.voice_end_seconds is number && data.voice_end_seconds >= 0 && data.voice_end_seconds <= 300))
+        && data.status in ['draft', 'lyric_approved', 'generating', 'ready', 'approved', 'failed', 'needs_person', 'archived']
+        && (!('best_take_id' in data) || isValidNullableString(data.best_take_id, 128))
+        && data.created_at is string && data.created_at.size() >= 1 && data.created_at.size() <= 64
+        && data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 64
+        && data.archived is bool
         && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128;
     }
 
+    function isValidTake(data) {
+      return data.keys().hasAll([
+          'id', 'take_number', 'model', 'storage_path', 'duration_seconds',
+          'lufs', 'true_peak_db', 'cost_estimate', 'created_at', 'status', 'ownerId'
+        ])
+        && isValidId(data.id)
+        && data.take_number is int && data.take_number >= 1
+        && data.model is string && data.model.size() >= 1 && data.model.size() <= 64
+        && data.storage_path is string && data.storage_path.size() >= 1 && data.storage_path.size() <= 256
+        && (!('download_url' in data) || isValidNullableString(data.download_url, 1024))
+        && data.duration_seconds is number
+        && data.lufs is number
+        && data.true_peak_db is number
+        && (!('words_heard_pct' in data) || data.words_heard_pct == null || (data.words_heard_pct is number && data.words_heard_pct >= 0 && data.words_heard_pct <= 100))
+        && (!('missing_words' in data) || isValidBoundedWordList(data.missing_words, 50))
+        && (!('extra_words' in data) || isValidBoundedWordList(data.extra_words, 50))
+        && (!('voice_start' in data) || data.voice_start == null || data.voice_start is number)
+        && (!('voice_end' in data) || data.voice_end == null || data.voice_end is number)
+        && data.cost_estimate is number
+        && data.created_at is string && data.created_at.size() >= 1 && data.created_at.size() <= 64
+        && data.status in ['ready', 'failed']
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128;
+    }
+
+    function isValidSongHistory(data) {
+      return data.keys().hasAll([
+          'id', 'song_id', 'song_number', 'title', 'lines', 'admin_feeling', 'action', 'timestamp', 'ownerId'
+        ])
+        && isValidId(data.id)
+        && data.song_id is string && data.song_id.size() >= 1 && data.song_id.size() <= 128
+        && data.song_number is int && data.song_number >= 1
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 120
+        && isValidLines(data.lines)
+        && data.admin_feeling is string && data.admin_feeling.size() >= 1 && data.admin_feeling.size() <= 64
+        && data.action in ['created', 'edited', 'archived', 'restored', 'migrated', 'lyric_approved']
+        && data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128;
+    }
+
+    function isValidSettings(data) {
+      return data.keys().hasAll([
+          'feelings', 'lines_per_song', 'max_words_per_line', 'forbidden_words',
+          'block_substrings', 'no_numbers_prices_brands', 'default_model',
+          'target_length', 'updated_at', 'ownerId'
+        ])
+        && data.feelings is list && data.feelings.size() >= 1 && data.feelings.size() <= 30
+        && data.lines_per_song is int && data.lines_per_song >= 1 && data.lines_per_song <= 12
+        && data.max_words_per_line is int && data.max_words_per_line >= 1 && data.max_words_per_line <= 15
+        && data.forbidden_words is list && data.forbidden_words.size() <= 100
+        && data.block_substrings is bool
+        && data.no_numbers_prices_brands is bool
+        && data.default_model is string && data.default_model.size() >= 1 && data.default_model.size() <= 64
+        && data.target_length is number && data.target_length >= 10 && data.target_length <= 120
+        && data.updated_at is string && data.updated_at.size() >= 1 && data.updated_at.size() <= 64
+        && data.ownerId is string && data.ownerId.size() >= 1 && data.ownerId.size() <= 128;
+    }
+
+    // 1. Songs Collection
     match /songs/{songId} {
       allow get: if isVerified() && isValidId(songId) && (resource == null || existing().ownerId == request.auth.uid || isStudioAdmin());
       allow list: if isVerified() && (resource.data.ownerId == request.auth.uid || isStudioAdmin());
@@ -124,20 +150,61 @@ service cloud.firestore {
         && isValidId(songId)
         && isValidSong(incoming())
         && incoming().ownerId == request.auth.uid
-        && string(incoming().number) == songId;
+        && (incoming().id == songId || string(incoming().number) == songId);
       allow update: if isVerified()
         && isValidId(songId)
         && isValidSong(incoming())
         && (existing().ownerId == request.auth.uid || isStudioAdmin())
         && incoming().ownerId == existing().ownerId
-        && incoming().number == existing().number
-        && incoming().feeling_key == existing().feeling_key
-        && incoming().file_name == existing().file_name
-        && (
-          incoming().diff(existing()).affectedKeys().hasOnly(['title', 'theme', 'lines', 'mood', 'tempo_bpm', 'instruments', 'vocal_tone', 'admin_feeling'])
-          || incoming().diff(existing()).affectedKeys().hasOnly(['status', 'model_used', 'duration_seconds', 'lufs', 'true_peak_db', 'storage_path', 'download_url', 'generated_at', 'error_message', 'words_heard_pct', 'transcribed_text', 'missing_words', 'extra_words', 'voice_start_seconds', 'voice_end_seconds'])
-          || isStudioAdmin()
-        );
+        && incoming().id == existing().id
+        && incoming().number == existing().number;
+      allow delete: if false;
+
+      // 2. Takes Subcollection (Master Gate Pillar)
+      match /takes/{takeId} {
+        allow get, list: if isVerified()
+          && isValidId(songId)
+          && isValidId(takeId)
+          && (get(/databases/$(database)/documents/songs/$(songId)).data.ownerId == request.auth.uid || isStudioAdmin());
+        allow create: if isVerified()
+          && isValidId(songId)
+          && isValidId(takeId)
+          && isValidTake(incoming())
+          && incoming().ownerId == request.auth.uid
+          && incoming().id == takeId
+          && (get(/databases/$(database)/documents/songs/$(songId)).data.ownerId == request.auth.uid || isStudioAdmin());
+        allow update: if isVerified()
+          && isValidId(songId)
+          && isValidId(takeId)
+          && isValidTake(incoming())
+          && (existing().ownerId == request.auth.uid || isStudioAdmin())
+          && incoming().ownerId == existing().ownerId
+          && incoming().id == existing().id;
+        allow delete: if false;
+      }
+    }
+
+    // 3. Song History Collection (Never deleted)
+    match /song_history/{historyId} {
+      allow get: if isVerified() && isValidId(historyId) && (resource == null || existing().ownerId == request.auth.uid || isStudioAdmin());
+      allow list: if isVerified() && (resource.data.ownerId == request.auth.uid || isStudioAdmin());
+      allow create: if isVerified()
+        && isValidId(historyId)
+        && isValidSongHistory(incoming())
+        && incoming().ownerId == request.auth.uid
+        && incoming().id == historyId;
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    // 4. Studio Settings Collection
+    match /settings/{settingId} {
+      allow get: if isVerified() && isValidId(settingId);
+      allow list: if isVerified();
+      allow create, update: if isVerified()
+        && isValidId(settingId)
+        && isValidSettings(incoming())
+        && (incoming().ownerId == request.auth.uid || isStudioAdmin());
       allow delete: if false;
     }
   }

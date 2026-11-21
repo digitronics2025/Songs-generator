@@ -13,39 +13,48 @@ import {
   AlertTriangle,
   Plus,
   Trash2,
+  History,
+  CheckCircle2,
+  Clock,
+  ShieldCheck,
+  Archive,
+  ArchiveRestore,
+  Layers,
 } from "lucide-react";
-import { type SongState } from "../data/songs";
-import {
-  ADMIN_FEELINGS,
-  countLineWords,
-  validateLyrics,
-  type AdminFeeling,
-} from "../lib/lyricQuality";
+import type { SongState, SongTake, StudioSettings } from "../data/songs";
+import { countLineWords, validateLyrics } from "../lib/lyricQuality";
 
 interface SongRowProps {
   song: SongState;
+  settings: StudioSettings;
   isPlaying: boolean;
   isActiveTrack: boolean;
   isGenerating: boolean;
   currentTime: number;
   duration: number;
   isBatchRunning: boolean;
-  onTogglePlay: (song: SongState) => void;
+  isSelected?: boolean;
+  onToggleSelect?: (songId: string) => void;
+  onTogglePlay: (song: SongState, take?: SongTake) => void;
   onSeek: (time: number) => void;
   onGenerate: (songNumber: number) => void;
-  onDownloadSingle: (song: SongState) => void;
-  onChangeAdminFeeling: (songNumber: number, adminFeeling: AdminFeeling) => Promise<void>;
+  onDownloadSingle: (song: SongState, take?: SongTake) => void;
+  onChangeAdminFeeling: (songId: string, adminFeeling: string) => Promise<void>;
   onSaveEdit: (
-    songNumber: number,
+    songId: string,
     updates: {
       title: string;
       lines: string[];
       mood: string;
       tempo_bpm: number;
       instruments: string;
-      admin_feeling: AdminFeeling;
+      admin_feeling: string;
     }
   ) => Promise<void>;
+  onApproveLyric: (songId: string) => Promise<void>;
+  onApproveTake: (songId: string, takeId: string) => Promise<void>;
+  onToggleArchive: (songId: string, archive: boolean) => Promise<void>;
+  onViewHistory?: (songNumber: number) => void;
 }
 
 function formatTime(sec: number): string {
@@ -57,36 +66,59 @@ function formatTime(sec: number): string {
 
 export function SongRow({
   song,
+  settings,
   isPlaying,
   isActiveTrack,
   isGenerating,
   currentTime,
   duration,
   isBatchRunning,
+  isSelected = false,
+  onToggleSelect,
   onTogglePlay,
   onSeek,
   onGenerate,
   onDownloadSingle,
   onChangeAdminFeeling,
   onSaveEdit,
+  onApproveLyric,
+  onApproveTake,
+  onToggleArchive,
+  onViewHistory,
 }: SongRowProps) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingFeeling, setSavingFeeling] = useState(false);
+  const [showTakesDrawer, setShowTakesDrawer] = useState(false);
+
   const [draftTitle, setDraftTitle] = useState(song.title);
   const [draftLines, setDraftLines] = useState<string[]>(song.lines);
   const [draftMood, setDraftMood] = useState(song.mood);
   const [draftTempo, setDraftTempo] = useState(song.tempo_bpm);
   const [draftInstruments, setDraftInstruments] = useState(song.instruments);
-  const [draftAdminFeeling, setDraftAdminFeeling] = useState<AdminFeeling>(song.admin_feeling);
+  const [draftAdminFeeling, setDraftAdminFeeling] = useState<string>(song.admin_feeling);
 
-  const savedLyricCheck = useMemo(() => validateLyrics(song.lines), [song.lines]);
-  const draftLyricCheck = useMemo(() => validateLyrics(draftLines), [draftLines]);
+  const savedLyricCheck = useMemo(
+    () => validateLyrics(song.lines, settings),
+    [song.lines, settings]
+  );
+  const draftLyricCheck = useMemo(
+    () => validateLyrics(draftLines, settings),
+    [draftLines, settings]
+  );
+
+  const takes = song.takes || [];
+  const hasAudio = Boolean(song.download_url || song.storage_path);
+  const canGenerate =
+    song.status === "lyric_approved" ||
+    song.status === "ready" ||
+    song.status === "approved" ||
+    song.status === "failed";
 
   const startEdit = () => {
     setDraftTitle(song.title);
     const padded = [...song.lines];
-    while (padded.length < 6) {
+    while (padded.length < settings.lines_per_song) {
       padded.push("");
     }
     setDraftLines(padded);
@@ -100,12 +132,11 @@ export function SongRow({
   const handleSave = async () => {
     setSaving(true);
     try {
-      const cleanedLines = draftLines.map((l) => l.trim()).filter((l, idx) => l.length > 0 || idx < 6);
-      await onSaveEdit(song.number, {
+      await onSaveEdit(song.id, {
         title: draftTitle,
-        lines: cleanedLines.slice(0, 8),
+        lines: draftLines.filter((l) => l.trim().length > 0),
         mood: draftMood,
-        tempo_bpm: Math.min(100, Math.max(70, Number(draftTempo) || 80)),
+        tempo_bpm: draftTempo,
         instruments: draftInstruments,
         admin_feeling: draftAdminFeeling,
       });
@@ -115,49 +146,63 @@ export function SongRow({
     }
   };
 
-  const handleFeelingSelect = async (next: AdminFeeling) => {
+  const handleFeelingSelect = async (nextFeeling: string) => {
     setSavingFeeling(true);
     try {
-      await onChangeAdminFeeling(song.number, next);
+      await onChangeAdminFeeling(song.id, nextFeeling);
     } finally {
       setSavingFeeling(false);
     }
   };
 
-  const trackDuration = isActiveTrack && duration > 0 ? duration : song.duration_seconds || 0;
-  const trackProgress = isActiveTrack && trackDuration > 0 ? (currentTime / trackDuration) * 100 : 0;
   const paddedNumber = String(song.number).padStart(2, "0");
-
-  const hasWordsCheck = typeof song.words_heard_pct === "number";
-  const wordsWarning = hasWordsCheck && (song.words_heard_pct ?? 0) < 90;
-  const hasVoiceStart = typeof song.voice_start_seconds === "number";
-  const hasVoiceEnd = typeof song.voice_end_seconds === "number";
-  const voiceStartWarning = hasVoiceStart && (song.voice_start_seconds ?? 0) > 1;
-  const voiceEndWarning = hasVoiceEnd && (song.voice_end_seconds ?? 0) > 27;
+  const isBusy = isGenerating || song.status === "generating";
 
   return (
-    <article className="border-b border-[#E5E4DF] bg-white px-5 py-5 transition-colors hover:bg-[#FCFBF9] sm:px-6">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-        {/* Left: Number, Play Control, Metadata & Title */}
-        <div className="flex min-w-0 flex-1 items-start gap-4">
-          <div className="flex shrink-0 flex-col items-center gap-2 pt-0.5">
-            <span className="font-mono text-xs font-medium text-[#706E67] tabular-nums">
-              {paddedNumber}
+    <article
+      className={`border-b border-[#ECEBE6] transition-colors ${
+        song.archived
+          ? "bg-[#FAF9F6] opacity-75"
+          : isActiveTrack
+          ? "bg-[#F4F7FB]/60"
+          : isSelected
+          ? "bg-[#EFF6FF]/40"
+          : "hover:bg-[#FCFBF8]"
+      }`}
+    >
+      <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
+        {/* Left Side: Checkbox, Audio Play Button, Metadata */}
+        <div className="flex min-w-0 flex-1 items-start gap-3.5">
+          {/* Checkbox */}
+          <div className="pt-2">
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => onToggleSelect?.(song.id)}
+              aria-label={`Select song ${song.number}`}
+              className="h-4 w-4 cursor-pointer accent-[#1B3B6F]"
+            />
+          </div>
+
+          {/* Number & Play Button */}
+          <div className="flex shrink-0 flex-col items-center gap-1.5 pt-0.5">
+            <span className="font-mono text-xs font-semibold text-[#706E67] tabular-nums">
+              #{paddedNumber}
             </span>
             <button
               type="button"
               onClick={() => onTogglePlay(song)}
-              disabled={song.status !== "ready" || (!song.download_url && !song.storage_path)}
-              aria-label={isPlaying ? `Pause ${song.feeling_key}` : `Play ${song.feeling_key}`}
-              className={`flex h-10 w-10 items-center justify-center rounded-lg border transition-all focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#1B3B6F] ${
-                song.status === "ready"
+              disabled={!hasAudio}
+              aria-label={isPlaying ? `Pause ${song.title}` : `Play ${song.title}`}
+              className={`flex h-10 w-10 items-center justify-center rounded-lg border transition-all ${
+                hasAudio
                   ? isPlaying
                     ? "border-[#1B3B6F] bg-[#1B3B6F] text-white"
                     : "border-[#D4D2CA] bg-white text-[#141413] hover:border-[#1B3B6F] hover:text-[#1B3B6F]"
                   : "cursor-not-allowed border-[#ECEBE6] bg-[#F8F8F6] text-[#B5B2A9]"
               }`}
             >
-              {isGenerating || song.status === "generating" ? (
+              {isBusy ? (
                 <Loader2 className="h-4 w-4 animate-spin text-[#1B3B6F]" />
               ) : isPlaying ? (
                 <Pause className="h-4 w-4" />
@@ -167,83 +212,103 @@ export function SongRow({
             </button>
           </div>
 
+          {/* Main Info */}
           <div className="min-w-0 flex-1">
-            {/* Title + Theme Row */}
+            {/* Title & Status */}
             <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
                 <h3
                   dir="rtl"
-                  className="font-arabic text-xl font-semibold tracking-normal text-[#141413]"
+                  className="font-arabic text-xl font-bold tracking-normal text-[#141413]"
                 >
                   {song.title}
                 </h3>
-                <span className="font-mono text-xs text-[#6E6C66] tabular-nums">
-                  {song.file_name}
+                <span className="font-mono text-xs text-[#706E67]">
+                  ({song.feeling_key})
                 </span>
               </div>
+
+              {/* Status Badges */}
               <div className="flex items-center gap-2 text-xs">
-                {isGenerating || song.status === "generating" ? (
-                  <span className="inline-flex items-center gap-1.5 font-medium text-[#1B3B6F]">
+                {isBusy ? (
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-[#1B3B6F]">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Generating, checking voice &amp; uploading…
+                    Generating take…
                   </span>
-                ) : song.status === "pending" ? (
-                  <span className="text-[#6E6C66]">Pending review</span>
+                ) : song.status === "approved" ? (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-[#DCFCE7] px-2.5 py-0.5 font-semibold text-[#15803D]">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    Approved
+                    {song.best_take_id ? ` · ${song.best_take_id}` : ""}
+                  </span>
                 ) : song.status === "ready" ? (
-                  <span className="inline-flex items-center gap-1.5 font-medium text-[#15803D] tabular-nums">
+                  <span className="inline-flex items-center gap-1 font-semibold text-[#15803D]">
                     <Check className="h-3.5 w-3.5" />
-                    Ready · {song.duration_seconds?.toFixed(1)}s · {song.lufs?.toFixed(1) ?? "-14.0"} LUFS
-                    {song.model_used ? ` · ${song.model_used}` : ""}
+                    Ready · {song.duration_seconds?.toFixed(1) ?? "30"}s
+                    {takes.length > 0 ? ` (${takes.length} takes)` : ""}
                   </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 font-medium text-[#B91C1C]">
+                ) : song.status === "lyric_approved" ? (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-[#EFF6FF] px-2 py-0.5 font-semibold text-[#1D4ED8]">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Lyric Approved
+                  </span>
+                ) : song.status === "draft" ? (
+                  <span className="rounded-md bg-[#FFFBEB] px-2 py-0.5 font-semibold text-[#92400E]">
+                    Draft Lyric
+                  </span>
+                ) : song.status === "needs_person" ? (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-[#FFE4E6] px-2 py-0.5 font-semibold text-[#9F1239]">
                     <AlertCircle className="h-3.5 w-3.5" />
-                    Generation failed
+                    Needs Person
                   </span>
-                )}
+                ) : song.status === "failed" ? (
+                  <span className="inline-flex items-center gap-1 font-semibold text-[#DC2626]">
+                    <AlertCircle className="h-3.5 w-3.5" />
+                    Failed
+                  </span>
+                ) : song.archived ? (
+                  <span className="rounded-md bg-[#F3F4F6] px-2 py-0.5 text-[#6B7280]">
+                    Archived
+                  </span>
+                ) : null}
               </div>
             </div>
 
-            {/* Metadata + admin_feeling dropdown */}
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1.5 text-[13px] text-[#57554F]">
-              <span>{song.theme}</span>
-              <span aria-hidden="true">·</span>
+            {/* Metadata Chips / Feeling selector */}
+            <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-[#57554F]">
+              <span className="font-medium text-[#1B3B6F]">{song.theme}</span>
+              <span>·</span>
               <span>{song.mood}</span>
-              <span aria-hidden="true">·</span>
-              <span className="font-mono text-xs tabular-nums">{song.tempo_bpm} BPM</span>
-              <span aria-hidden="true">·</span>
+              <span>·</span>
+              <span className="font-mono tabular-nums">{song.tempo_bpm} BPM</span>
+              <span>·</span>
               <span className="text-[#706E67]">{song.instruments}</span>
-              <span aria-hidden="true">·</span>
-              <label className="inline-flex items-center gap-1.5">
-                <span className="font-mono text-[11px] font-medium text-[#3F3E39]">
-                  admin_feeling:
-                </span>
+              <span>·</span>
+              <label className="inline-flex items-center gap-1">
+                <span className="font-mono text-[10px] text-[#706E67]">feeling:</span>
                 <select
                   value={song.admin_feeling}
-                  disabled={savingFeeling || isGenerating || isBatchRunning}
-                  onChange={(e) => {
-                    void handleFeelingSelect(e.target.value as AdminFeeling);
-                  }}
-                  aria-label={`admin_feeling for song ${song.number}`}
-                  className="rounded-md border border-[#D4D2CA] bg-[#FAF9F6] px-2 py-0.5 font-mono text-[11px] text-[#141413] focus:border-[#1B3B6F] focus:bg-white focus:outline-none disabled:opacity-60"
+                  disabled={savingFeeling || isBusy || isBatchRunning}
+                  onChange={(e) => void handleFeelingSelect(e.target.value)}
+                  className="rounded border border-[#D4D2CA] bg-white px-1.5 py-0.5 font-mono text-[11px] text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
                 >
-                  {ADMIN_FEELINGS.map((feeling) => (
-                    <option key={feeling} value={feeling}>
-                      {feeling}
+                  {settings.feelings.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
                     </option>
                   ))}
                 </select>
               </label>
             </div>
 
-            {/* Red Lyric Rule Warnings (always shown if song breaks admin lyric rules) */}
+            {/* Lyric Rule Warnings if Invalid */}
             {!savedLyricCheck.valid && !editing && (
-              <div className="mt-2.5 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] px-3.5 py-2.5 text-xs text-[#991B1B]">
+              <div className="mt-2.5 rounded-lg border border-[#FCA5A5] bg-[#FEF2F2] p-2.5 text-xs text-[#991B1B]">
                 <div className="flex items-center gap-1.5 font-semibold">
                   <AlertCircle className="h-3.5 w-3.5 shrink-0 text-[#DC2626]" />
-                  <span>Lyric rules not met — generation blocked until fixed:</span>
+                  <span>Lyric rules not met:</span>
                 </div>
-                <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
+                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-[11px]">
                   {savedLyricCheck.errors.map((err, i) => (
                     <li key={i}>{err}</li>
                   ))}
@@ -251,130 +316,167 @@ export function SongRow({
               </div>
             )}
 
-            {/* Post-Generation Gemini Transcription & Voice Timing Quality Checks */}
-            {(hasWordsCheck || hasVoiceStart || hasVoiceEnd) && (
-              <div className="mt-2.5 rounded-lg border border-[#E5E4DF] bg-[#FAF9F6] px-3.5 py-2.5 text-xs">
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                  {hasWordsCheck && (
-                    <span
-                      className={`inline-flex items-center gap-1.5 font-medium tabular-nums ${
-                        wordsWarning ? "text-[#B91C1C]" : "text-[#15803D]"
-                      }`}
-                    >
-                      {wordsWarning ? (
-                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                      ) : (
-                        <Check className="h-3.5 w-3.5 shrink-0" />
-                      )}
-                      Words heard: {song.words_heard_pct}%
-                      {wordsWarning ? " (Warning: under 90%)" : ""}
-                    </span>
-                  )}
-
-                  {(hasVoiceStart || hasVoiceEnd) && (
-                    <span
-                      className={`inline-flex items-center gap-1.5 font-mono text-[11px] font-medium tabular-nums ${
-                        voiceStartWarning || voiceEndWarning ? "text-[#B91C1C]" : "text-[#15803D]"
-                      }`}
-                    >
-                      {voiceStartWarning || voiceEndWarning ? (
-                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                      ) : (
-                        <Check className="h-3.5 w-3.5 shrink-0" />
-                      )}
-                      Voice start:{" "}
-                      {hasVoiceStart ? `${song.voice_start_seconds?.toFixed(1)}s` : "—"}
-                      {voiceStartWarning ? " (> 1s!)" : ""} · Voice end:{" "}
-                      {hasVoiceEnd ? `${song.voice_end_seconds?.toFixed(1)}s` : "—"}
-                      {voiceEndWarning ? " (> 27s!)" : ""}
-                    </span>
-                  )}
-                </div>
-
-                {song.transcribed_text && (
-                  <p dir="rtl" className="font-arabic mt-1.5 text-right text-[13px] text-[#3F3E39]">
-                    <span dir="ltr" className="ml-2 font-sans text-[11px] font-medium text-[#6E6C66]">
-                      Gemini heard:
-                    </span>
-                    {song.transcribed_text}
-                  </p>
+            {/* Quality check summary (transcription, words heard %, voice timing) */}
+            {(typeof song.words_heard_pct === "number" || typeof song.voice_start_seconds === "number") && (
+              <div className="mt-2 flex flex-wrap items-center gap-3 rounded-md bg-[#FAF9F6] px-3 py-1.5 text-[11px]">
+                {typeof song.words_heard_pct === "number" && (
+                  <span
+                    className={`font-semibold tabular-nums ${
+                      song.words_heard_pct >= 90 ? "text-[#15803D]" : "text-[#B91C1C]"
+                    }`}
+                  >
+                    Words heard: {song.words_heard_pct}%
+                  </span>
                 )}
-
-                {((song.missing_words && song.missing_words.length > 0) ||
-                  (song.extra_words && song.extra_words.length > 0)) && (
-                  <div className="mt-1.5 flex flex-wrap gap-x-5 gap-y-1 border-t border-[#ECEBE6] pt-1.5 text-[11px]">
-                    {song.missing_words && song.missing_words.length > 0 && (
-                      <div className="text-[#991B1B]">
-                        <span className="font-semibold">Missing ({song.missing_words.length}): </span>
-                        <span dir="rtl" className="font-arabic">
-                          {song.missing_words.join(" ، ")}
-                        </span>
-                      </div>
-                    )}
-                    {song.extra_words && song.extra_words.length > 0 && (
-                      <div className="text-[#92400E]">
-                        <span className="font-semibold">Extra ({song.extra_words.length}): </span>
-                        <span dir="rtl" className="font-arabic">
-                          {song.extra_words.join(" ، ")}
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                {typeof song.voice_start_seconds === "number" && (
+                  <span className="text-[#6E6C66]">
+                    Voice: {song.voice_start_seconds.toFixed(1)}s –{" "}
+                    {song.voice_end_seconds?.toFixed(1)}s
+                  </span>
+                )}
+                {typeof song.lufs === "number" && (
+                  <span className="font-mono text-[#57554F]">
+                    {song.lufs.toFixed(1)} LUFS · {song.true_peak_db?.toFixed(1)} dBTP
+                  </span>
                 )}
               </div>
             )}
 
-            {/* Error details if failed */}
-            {song.status === "error" && song.error_message && (
-              <p className="mt-2 rounded-md border border-[#FECACA] bg-[#FEF2F2] px-3 py-2 text-xs text-[#991B1B]">
-                {song.error_message}
-              </p>
-            )}
-
-            {/* Inline Audio Scrubber when Ready */}
-            {song.status === "ready" && (
+            {/* Inline Audio Scrubber when Playing / Has Audio */}
+            {hasAudio && (
               <div className="mt-3 flex items-center gap-3">
-                <span className="w-9 font-mono text-[11px] text-[#6E6C66] tabular-nums">
+                <span className="w-8 font-mono text-[10px] text-[#706E67] tabular-nums">
                   {isActiveTrack ? formatTime(currentTime) : "0:00"}
                 </span>
                 <input
                   type="range"
                   min={0}
-                  max={trackDuration || 40}
+                  max={duration || song.duration_seconds || 30}
                   step={0.1}
                   value={isActiveTrack ? currentTime : 0}
-                  disabled={!isActiveTrack}
                   onChange={(e) => onSeek(Number(e.target.value))}
-                  aria-label={`Seek ${song.feeling_key}`}
-                  style={{
-                    background: `linear-gradient(to right, #1B3B6F ${trackProgress}%, #E5E4DF ${trackProgress}%)`,
-                  }}
-                  className="h-1.5 w-full max-w-md cursor-pointer appearance-none rounded-full accent-[#1B3B6F] disabled:cursor-default"
+                  aria-label={`Scrub track ${song.number}`}
+                  className="h-1 flex-1 cursor-pointer accent-[#1B3B6F]"
                 />
-                <span className="w-9 text-right font-mono text-[11px] text-[#6E6C66] tabular-nums">
-                  {formatTime(trackDuration)}
+                <span className="w-8 font-mono text-[10px] text-[#706E67] tabular-nums">
+                  {formatTime(song.duration_seconds || 30)}
                 </span>
               </div>
             )}
 
-            {/* Lyrics View or Edit Form */}
+            {/* Takes Drawer */}
+            {takes.length > 0 && (
+              <div className="mt-3 rounded-lg border border-[#ECEBE6] bg-[#FAF9F6] p-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Layers className="h-3.5 w-3.5 text-[#1B3B6F]" />
+                    <span className="text-xs font-semibold text-[#141413]">
+                      Takes ({takes.length}):
+                    </span>
+                    <span className="text-[11px] text-[#6E6C66]">
+                      Best: {song.best_take_id || `take_1`}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowTakesDrawer((prev) => !prev)}
+                    className="font-mono text-[11px] text-[#1B3B6F] underline hover:text-[#152E57]"
+                  >
+                    {showTakesDrawer ? "Hide takes" : "View all takes"}
+                  </button>
+                </div>
+
+                {showTakesDrawer && (
+                  <div className="mt-2 space-y-1.5 border-t border-[#ECEBE6] pt-2">
+                    {takes.map((take) => {
+                      const isBest =
+                        song.best_take_id === take.id ||
+                        (!song.best_take_id && take.take_number === 1);
+                      return (
+                        <div
+                          key={take.id}
+                          className={`flex flex-wrap items-center justify-between gap-2 rounded-md border p-2 text-xs ${
+                            isBest
+                              ? "border-[#BBF7D0] bg-[#F0FDF4]"
+                              : "border-[#E5E4DF] bg-white"
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center gap-2.5">
+                            <span className="font-mono font-bold text-[#141413]">
+                              Take #{take.take_number}
+                            </span>
+                            <span className="text-[#6E6C66]">{take.model}</span>
+                            <span className="font-mono">
+                              {take.lufs?.toFixed(1)} LUFS
+                            </span>
+                            <span
+                              className={`font-semibold ${
+                                (take.words_heard_pct ?? 0) >= 90
+                                  ? "text-[#15803D]"
+                                  : "text-[#B91C1C]"
+                              }`}
+                            >
+                              {take.words_heard_pct ?? 0}% heard
+                            </span>
+                            {isBest && (
+                              <span className="rounded bg-[#DCFCE7] px-2 py-0.5 text-[10px] font-bold text-[#15803D]">
+                                Best Take
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => onTogglePlay(song, take)}
+                              className="rounded border border-[#D4D2CA] bg-white px-2 py-0.5 text-[11px] font-medium text-[#1B3B6F] hover:bg-[#F3F2EE]"
+                            >
+                              Play Take
+                            </button>
+                            {!isBest && (
+                              <button
+                                type="button"
+                                onClick={() => onApproveTake(song.id, take.id)}
+                                className="rounded bg-[#1B3B6F] px-2.5 py-0.5 text-[11px] font-semibold text-white hover:bg-[#152E57]"
+                              >
+                                Approve Take
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => onDownloadSingle(song, take)}
+                              className="rounded p-1 text-[#6E6C66] hover:text-[#141413]"
+                              title="Download Take WAV"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Lyrics Text or Edit Box */}
             {!editing ? (
-              <div className="mt-3.5 grid gap-1.5 border-t border-[#F0EFEA] pt-3">
-                {song.lines.map((line, index) => {
+              <div className="mt-3 grid gap-1.5 border-t border-[#F0EFEA] pt-2.5">
+                {song.lines.map((line, idx) => {
                   const wc = countLineWords(line);
-                  const wcOk = wc >= 1 && wc <= 5;
+                  const isWordOk = wc >= 1 && wc <= settings.max_words_per_line;
                   return (
-                    <div key={index} className="flex items-baseline justify-between gap-4">
+                    <div key={idx} className="flex items-baseline justify-between gap-4">
                       <span
-                        className={`font-mono text-[11px] tabular-nums ${
-                          wcOk ? "text-[#8A877F]" : "font-semibold text-[#DC2626]"
+                        className={`font-mono text-[10px] tabular-nums ${
+                          isWordOk ? "text-[#8A877F]" : "font-bold text-[#DC2626]"
                         }`}
                       >
-                        L{index + 1} · {wc}/5w
+                        L{idx + 1} · {wc}/{settings.max_words_per_line}w
                       </span>
                       <p
                         dir="rtl"
-                        className="font-arabic flex-1 text-right text-[15px] leading-[1.7] font-medium text-[#1F1E1C]"
+                        className="font-arabic flex-1 text-right text-[15px] font-medium text-[#1F1E1C]"
                       >
                         {line}
                       </p>
@@ -383,100 +485,71 @@ export function SongRow({
                 })}
               </div>
             ) : (
-              <div className="mt-3.5 space-y-3 rounded-lg border border-[#DCDAD2] bg-[#FAF9F6] p-4">
+              /* Inline Edit Mode */
+              <div className="mt-3 space-y-3 rounded-lg border border-[#DCDAD2] bg-[#FAF9F6] p-4">
                 <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="block">
-                    <span className="mb-1 block text-xs font-medium text-[#57554F]">
-                      Arabic Title (first words of Line 1)
-                    </span>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#57554F]">
+                      Title (Arabic)
+                    </label>
                     <input
                       type="text"
                       dir="rtl"
                       value={draftTitle}
                       onChange={(e) => setDraftTitle(e.target.value)}
-                      className="font-arabic w-full rounded-md border border-[#D4D2CA] bg-white px-3 py-1.5 text-sm text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
+                      className="font-arabic mt-1 w-full rounded-md border border-[#D4D2CA] bg-white px-3 py-1.5 text-sm font-semibold text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
                     />
-                  </label>
-                  <div className="grid grid-cols-3 gap-2">
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-medium text-[#57554F]">
-                        admin_feeling
-                      </span>
-                      <select
-                        value={draftAdminFeeling}
-                        onChange={(e) => setDraftAdminFeeling(e.target.value as AdminFeeling)}
-                        className="w-full rounded-md border border-[#D4D2CA] bg-white px-2 py-1.5 font-mono text-xs text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
-                      >
-                        {ADMIN_FEELINGS.map((f) => (
-                          <option key={f} value={f}>
-                            {f}
-                          </option>
-                        ))}
-                      </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-[#57554F]">
+                      Mood &amp; Tempo
                     </label>
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-medium text-[#57554F]">Mood</span>
+                    <div className="mt-1 flex gap-2">
                       <input
                         type="text"
                         value={draftMood}
                         onChange={(e) => setDraftMood(e.target.value)}
-                        className="w-full rounded-md border border-[#D4D2CA] bg-white px-2.5 py-1.5 text-sm text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
+                        placeholder="Mood"
+                        className="flex-1 rounded-md border border-[#D4D2CA] bg-white px-2.5 py-1.5 text-xs text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
                       />
-                    </label>
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-medium text-[#57554F]">
-                        Tempo (70–100)
-                      </span>
                       <input
                         type="number"
                         min={70}
                         max={100}
                         value={draftTempo}
                         onChange={(e) => setDraftTempo(Number(e.target.value))}
-                        className="font-mono w-full rounded-md border border-[#D4D2CA] bg-white px-2.5 py-1.5 text-sm text-[#141413] tabular-nums focus:border-[#1B3B6F] focus:outline-none"
+                        className="w-18 font-mono rounded-md border border-[#D4D2CA] bg-white px-2 py-1.5 text-xs text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
                       />
-                    </label>
+                    </div>
                   </div>
                 </div>
 
-                <label className="block">
-                  <span className="mb-1 block text-xs font-medium text-[#57554F]">
-                    Instrumentation
-                  </span>
-                  <input
-                    type="text"
-                    value={draftInstruments}
-                    onChange={(e) => setDraftInstruments(e.target.value)}
-                    className="w-full rounded-md border border-[#D4D2CA] bg-white px-3 py-1.5 text-sm text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
-                  />
-                </label>
-
-                <div className="space-y-2">
+                <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="block text-xs font-medium text-[#57554F]">
-                      Exactly 6 Moroccan Darija Lines (max 5 words per line)
+                    <span className="text-xs font-semibold text-[#57554F]">
+                      Lyric Lines ({draftLines.length} lines, max {settings.max_words_per_line}w)
                     </span>
-                    {draftLines.length < 6 && (
-                      <button
-                        type="button"
-                        onClick={() => setDraftLines((prev) => [...prev, ""])}
-                        className="inline-flex items-center gap-1 rounded border border-[#D4D2CA] bg-white px-2 py-0.5 text-[11px] font-medium text-[#1B3B6F] hover:border-[#1B3B6F]"
-                      >
-                        <Plus className="h-3 w-3" />
-                        Add line
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => setDraftLines((prev) => [...prev, ""])}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#1B3B6F] hover:underline"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Add line
+                    </button>
                   </div>
+
                   {draftLines.map((line, idx) => {
                     const wc = countLineWords(line);
+                    const isOk = wc >= 1 && wc <= settings.max_words_per_line;
                     return (
                       <div key={idx} className="flex items-center gap-2">
                         <span
-                          className={`w-14 shrink-0 font-mono text-[11px] tabular-nums ${
-                            wc >= 1 && wc <= 5 ? "text-[#6E6C66]" : "font-semibold text-[#DC2626]"
+                          className={`w-12 font-mono text-[10px] tabular-nums ${
+                            isOk ? "text-[#706E67]" : "font-bold text-[#DC2626]"
                           }`}
                         >
-                          L{idx + 1}: {wc}/5w
+                          L{idx + 1}: {wc}w
                         </span>
                         <input
                           type="text"
@@ -487,15 +560,14 @@ export function SongRow({
                             next[idx] = e.target.value;
                             setDraftLines(next);
                           }}
-                          className="font-arabic w-full rounded-md border border-[#D4D2CA] bg-white px-3 py-1.5 text-sm text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
+                          className="font-arabic flex-1 rounded-md border border-[#D4D2CA] bg-white px-3 py-1.5 text-sm font-medium text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
                         />
-                        {draftLines.length > 6 && (
+                        {draftLines.length > settings.lines_per_song && (
                           <button
                             type="button"
                             onClick={() =>
                               setDraftLines((prev) => prev.filter((_, i) => i !== idx))
                             }
-                            aria-label={`Remove line ${idx + 1}`}
                             className="rounded p-1 text-[#8A877F] hover:text-[#DC2626]"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -507,33 +579,26 @@ export function SongRow({
                 </div>
 
                 {!draftLyricCheck.valid && (
-                  <div className="rounded-md border border-[#FCA5A5] bg-[#FEF2F2] px-3 py-2 text-xs text-[#991B1B]">
-                    <p className="font-semibold">Rule warnings in draft:</p>
-                    <ul className="mt-1 list-disc space-y-0.5 pl-4">
-                      {draftLyricCheck.errors.map((err, i) => (
-                        <li key={i}>{err}</li>
-                      ))}
-                    </ul>
+                  <div className="rounded-md border border-[#FCA5A5] bg-[#FEF2F2] p-2 text-xs text-[#991B1B]">
+                    {draftLyricCheck.errors.join("; ")}
                   </div>
                 )}
 
-                <div className="flex items-center justify-end gap-2 pt-1">
+                <div className="flex items-center justify-end gap-2 pt-2">
                   <button
                     type="button"
                     onClick={() => setEditing(false)}
-                    className="inline-flex items-center gap-1.5 rounded-md border border-[#D4D2CA] bg-white px-3 py-1.5 text-xs font-medium text-[#3F3E39] hover:bg-[#F3F2EE] whitespace-nowrap shrink-0"
+                    className="rounded-md border border-[#D4D2CA] bg-white px-3 py-1.5 text-xs font-semibold text-[#57554F]"
                   >
-                    <X className="h-3.5 w-3.5" />
                     Cancel
                   </button>
                   <button
                     type="button"
-                    disabled={saving}
                     onClick={handleSave}
-                    className="inline-flex items-center gap-1.5 rounded-md bg-[#1B3B6F] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#152E57] disabled:opacity-60 whitespace-nowrap shrink-0"
+                    disabled={saving}
+                    className="inline-flex items-center gap-1 rounded-md bg-[#1B3B6F] px-4 py-1.5 text-xs font-semibold text-white hover:bg-[#152E57]"
                   >
-                    <Check className="h-3.5 w-3.5" />
-                    {saving ? "Saving…" : "Save changes"}
+                    {saving ? "Saving…" : "Save & Update History"}
                   </button>
                 </div>
               </div>
@@ -541,76 +606,104 @@ export function SongRow({
           </div>
         </div>
 
-        {/* Right: Action Buttons */}
-        <div className="flex shrink-0 flex-wrap items-center gap-2 lg:flex-col lg:items-end">
-          <div className="flex items-center gap-2">
+        {/* Right Side: Action Buttons Column */}
+        <div className="flex shrink-0 flex-row flex-wrap items-center gap-2 sm:flex-col sm:items-end">
+          {/* Approve Lyric button if in draft */}
+          {song.status === "draft" && (
+            <button
+              type="button"
+              onClick={() => void onApproveLyric(song.id)}
+              disabled={!savedLyricCheck.valid}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#15803D] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#166534] disabled:opacity-50 whitespace-nowrap"
+            >
+              <Check className="h-3.5 w-3.5" />
+              Approve Lyric
+            </button>
+          )}
+
+          {/* Generate Audio button */}
+          <button
+            type="button"
+            onClick={() => onGenerate(song.number)}
+            disabled={!canGenerate || isBusy || isBatchRunning || !savedLyricCheck.valid}
+            title={
+              !canGenerate
+                ? "Lyrics must be approved before generating audio."
+                : !savedLyricCheck.valid
+                ? "Fix lyric rule warnings before generating."
+                : undefined
+            }
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap ${
+              song.status === "approved" || song.status === "ready"
+                ? "border border-[#D4D2CA] bg-white text-[#141413] hover:border-[#1B3B6F] hover:text-[#1B3B6F]"
+                : "bg-[#1B3B6F] text-white hover:bg-[#152E57]"
+            }`}
+          >
+            {isBusy ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                Generating…
+              </>
+            ) : song.status === "approved" || song.status === "ready" ? (
+              <>
+                <RotateCcw className="h-3.5 w-3.5" />
+                Generate Take
+              </>
+            ) : (
+              <>
+                <Sparkles className="h-3.5 w-3.5" />
+                Generate Audio
+              </>
+            )}
+          </button>
+
+          {/* Secondary actions: Edit lyric, Download, History, Archive */}
+          <div className="flex items-center gap-1.5">
             {!editing && (
               <button
                 type="button"
                 onClick={startEdit}
-                disabled={isGenerating || song.status === "generating"}
-                className="inline-flex items-center gap-1.5 rounded-md border border-[#D4D2CA] bg-white px-3 py-2 text-xs font-medium text-[#3F3E39] transition-colors hover:border-[#A8A59B] hover:text-[#141413] disabled:opacity-50 whitespace-nowrap shrink-0"
+                disabled={isBusy}
+                className="rounded-md border border-[#D4D2CA] bg-white p-1.5 text-[#57554F] hover:border-[#1B3B6F] hover:text-[#1B3B6F]"
+                title="Edit lyrics"
               >
                 <Pencil className="h-3.5 w-3.5" />
-                Edit lyric
+              </button>
+            )}
+
+            {hasAudio && (
+              <button
+                type="button"
+                onClick={() => onDownloadSingle(song)}
+                className="rounded-md border border-[#D4D2CA] bg-white p-1.5 text-[#57554F] hover:border-[#1B3B6F] hover:text-[#1B3B6F]"
+                title="Download best take WAV"
+              >
+                <Download className="h-3.5 w-3.5" />
               </button>
             )}
 
             <button
               type="button"
-              onClick={() => onGenerate(song.number)}
-              disabled={
-                !savedLyricCheck.valid ||
-                isGenerating ||
-                song.status === "generating" ||
-                isBatchRunning
-              }
-              title={
-                !savedLyricCheck.valid
-                  ? "Fix red lyric rule warnings before generating"
-                  : undefined
-              }
-              className={`inline-flex items-center gap-1.5 rounded-md px-3.5 py-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 whitespace-nowrap shrink-0 ${
-                song.status === "ready"
-                  ? "border border-[#D4D2CA] bg-white text-[#141413] hover:border-[#1B3B6F] hover:text-[#1B3B6F]"
-                  : "bg-[#1B3B6F] text-white hover:bg-[#152E57]"
-              }`}
+              onClick={() => onViewHistory?.(song.number)}
+              className="rounded-md border border-[#D4D2CA] bg-white p-1.5 text-[#57554F] hover:border-[#1B3B6F] hover:text-[#1B3B6F]"
+              title="View lyric history"
             >
-              {isGenerating || song.status === "generating" ? (
-                <>
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  Generating…
-                </>
-              ) : song.status === "ready" ? (
-                <>
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Regenerate
-                </>
+              <History className="h-3.5 w-3.5" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void onToggleArchive(song.id, !song.archived)}
+              className="rounded-md border border-[#D4D2CA] bg-white p-1.5 text-[#57554F] hover:border-[#DC2626] hover:text-[#DC2626]"
+              title={song.archived ? "Restore from archive" : "Archive song"}
+            >
+              {song.archived ? (
+                <ArchiveRestore className="h-3.5 w-3.5" />
               ) : (
-                <>
-                  <Sparkles className="h-3.5 w-3.5" />
-                  Generate
-                </>
+                <Archive className="h-3.5 w-3.5" />
               )}
             </button>
           </div>
-
-          {!savedLyricCheck.valid && (
-            <span className="text-[11px] font-medium text-[#DC2626]">
-              Fix lyric rules to generate
-            </span>
-          )}
-
-          {song.status === "ready" && (song.download_url || song.storage_path) && (
-            <button
-              type="button"
-              onClick={() => onDownloadSingle(song)}
-              className="inline-flex items-center gap-1.5 rounded-md border border-[#D4D2CA] bg-[#FAF9F6] px-3 py-1.5 font-mono text-[11px] font-medium text-[#3F3E39] transition-colors hover:border-[#1B3B6F] hover:text-[#1B3B6F] whitespace-nowrap shrink-0"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Download WAV
-            </button>
-          )}
         </div>
       </div>
     </article>

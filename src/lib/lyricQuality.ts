@@ -17,21 +17,21 @@ export const DEFAULT_ADMIN_FEELING_BY_KEY: Record<string, AdminFeeling> = {
   grandparents: "family_evening",
   far_from_home: "calling_home",
   siblings: "family_evening",
-  childhood_friends: "summer_at_home",
-  true_friend: "family_evening",
+  childhood_friends: "family_evening",
+  true_friend: "calling_home",
   first_rain: "family_evening",
   winter_warmth: "family_evening",
   summer_sea: "summer_at_home",
   new_morning: "new_home",
-  graduation: "fathers_pride",
-  first_salary: "fathers_pride",
+  graduation: "mothers_care",
+  first_salary: "mothers_care",
   small_dream: "new_home",
   falling_rising: "fathers_pride",
-  patience: "mothers_care",
-  wedding_joy: "family_evening",
+  patience: "fathers_pride",
+  wedding_joy: "eid_morning",
   new_baby: "new_home",
   eid_together: "eid_morning",
-  small_gift: "mothers_care",
+  small_gift: "fathers_pride",
 };
 
 export const FORBIDDEN_SINGLE_WORDS = [
@@ -58,11 +58,7 @@ const PRICE_TERMS = [
   "أورو",
   "يورو",
   "دولار",
-  "ثمن",
-  "الثمن",
-  "بثمن",
   "سعر",
-  "السعر",
   "تخفيض",
   "مجانا",
   "فابور",
@@ -238,12 +234,32 @@ export interface LyricValidationResult {
   errors: string[];
 }
 
-export function validateLyrics(lines: string[]): LyricValidationResult {
+export function validateLyrics(
+  lines: string[],
+  settings?: {
+    lines_per_song?: number;
+    max_words_per_line?: number;
+    forbidden_words?: string[];
+    block_substrings?: boolean;
+    no_numbers_prices_brands?: boolean;
+  }
+): LyricValidationResult {
   const errors: string[] = [];
+  const targetLinesCount = settings?.lines_per_song ?? 6;
+  const maxWords = settings?.max_words_per_line ?? 5;
+  const blockSubstrings = settings?.block_substrings ?? true;
+  const noNumbersPricesBrands = settings?.no_numbers_prices_brands ?? true;
+  const activeForbiddenWords = settings?.forbidden_words ?? [
+    ...FORBIDDEN_SINGLE_WORDS,
+    ...FORBIDDEN_PHRASES,
+  ];
+
   const nonEmptyLines = lines.map((l) => l.trim()).filter(Boolean);
 
-  if (lines.length !== 6 || nonEmptyLines.length !== 6) {
-    errors.push(`Must have exactly 6 non-empty lines (currently ${nonEmptyLines.length}).`);
+  if (lines.length !== targetLinesCount || nonEmptyLines.length !== targetLinesCount) {
+    errors.push(
+      `Must have exactly ${targetLinesCount} non-empty lines (currently ${nonEmptyLines.length}).`
+    );
   }
 
   lines.forEach((rawLine, idx) => {
@@ -252,104 +268,119 @@ export function validateLyrics(lines: string[]): LyricValidationResult {
     if (!trimmed) return;
 
     const wc = countLineWords(trimmed);
-    if (wc > 5) {
-      errors.push(`Line ${lineNum} has ${wc} words (max 5 words per line).`);
+    if (wc > maxWords) {
+      errors.push(`Line ${lineNum} has ${wc} words (max ${maxWords} words per line).`);
     }
 
-    // Digits check (ASCII + Arabic-Indic + Extended Arabic-Indic)
-    if (/[0-9\u0660-\u0669\u06F0-\u06F9]/.test(trimmed)) {
-      errors.push(`Line ${lineNum} contains digits/numbers (numbers are not allowed).`);
-    }
+    if (noNumbersPricesBrands) {
+      // Digits check (ASCII + Arabic-Indic + Extended Arabic-Indic)
+      if (/[0-9\u0660-\u0669\u06F0-\u06F9]/.test(trimmed)) {
+        errors.push(`Line ${lineNum} contains digits/numbers (numbers are not allowed).`);
+      }
 
-    // Currency symbol check
-    if (/[$€£¥]/.test(trimmed)) {
-      errors.push(`Line ${lineNum} contains a price/currency symbol.`);
-    }
+      // Currency symbol check
+      if (/[$€£¥]/.test(trimmed)) {
+        errors.push(`Line ${lineNum} contains a price/currency symbol.`);
+      }
 
-    // Latin word check (brands, product names, English/French)
-    const latinMatch = trimmed.match(/[A-Za-z]{2,}/);
-    if (latinMatch) {
-      errors.push(
-        `Line ${lineNum} contains non-Arabic text "${latinMatch[0]}" (no brands, French, or English).`
-      );
+      // Latin word check (brands, product names, English/French)
+      const latinMatch = trimmed.match(/[A-Za-z]{2,}/);
+      if (latinMatch) {
+        errors.push(
+          `Line ${lineNum} contains non-Arabic text "${latinMatch[0]}" (no brands, French, or English).`
+        );
+      }
     }
 
     const normLine = normalizeArabicText(trimmed);
     const words = normLine ? normLine.split(" ") : [];
     const wordSet = new Set(words);
 
-    // Forbidden phrases
-    for (const phrase of FORBIDDEN_PHRASES) {
-      const normPhrase = normalizeArabicText(phrase);
-      if (
-        normLine.includes(normPhrase) ||
-        normLine.includes("الليل والنهار") ||
-        normLine.includes("ليل نهار")
-      ) {
-        errors.push(`Line ${lineNum} uses forbidden phrase "${phrase}".`);
-      }
-    }
+    // Check active forbidden words
+    for (const forbidden of activeForbiddenWords) {
+      const normForbidden = normalizeArabicText(forbidden);
+      if (!normForbidden) continue;
 
-    // Forbidden single words
-    for (const forbidden of FORBIDDEN_SINGLE_WORDS) {
-      const forms = buildWordForms(normalizeArabicText(forbidden));
-      // Also catch lma with possessive like لمتنا
-      if (forbidden === "لمة") {
-        forms.add("لمتنا");
-        forms.add("ولمتنا");
-        forms.add("لمتهم");
-        forms.add("لمتكم");
-      }
-      if (forbidden === "طفا") {
-        forms.add("طفات");
-        forms.add("طفاو");
-        forms.add("يطفا");
-        forms.add("تطفا");
-      }
-      for (const f of forms) {
-        if (wordSet.has(f)) {
-          errors.push(`Line ${lineNum} uses forbidden word "${forbidden}".`);
-          break;
-        }
-      }
-    }
-
-    // Number words check
-    for (const numWord of NUMBER_WORDS) {
-      const forms = buildWordForms(normalizeArabicText(numWord));
-      for (const f of forms) {
-        if (wordSet.has(f)) {
-          errors.push(`Line ${lineNum} uses number word "${numWord}" (no numbers allowed).`);
-          break;
-        }
-      }
-    }
-
-    // Price words check
-    for (const priceTerm of PRICE_TERMS) {
-      const normPrice = normalizeArabicText(priceTerm);
-      const forms = buildWordForms(normPrice);
-      for (const f of forms) {
-        if (wordSet.has(f)) {
-          errors.push(`Line ${lineNum} mentions price/currency term "${priceTerm}".`);
-          break;
-        }
-      }
-    }
-
-    // Brand/product names check
-    for (const brand of BRAND_OR_PRODUCT_TERMS) {
-      const normBrand = normalizeArabicText(brand);
-      if (normBrand.includes(" ")) {
-        if (normLine.includes(normBrand)) {
-          errors.push(`Line ${lineNum} mentions brand/product "${brand}".`);
+      if (normForbidden.includes(" ")) {
+        if (normLine.includes(normForbidden)) {
+          errors.push(`Line ${lineNum} uses forbidden phrase "${forbidden}".`);
         }
       } else {
-        const forms = buildWordForms(normBrand);
+        const forms = buildWordForms(normForbidden);
+        if (forbidden === "لمة") {
+          forms.add("لمتنا");
+          forms.add("ولمتنا");
+          forms.add("لمتهم");
+          forms.add("لمتكم");
+        }
+        if (forbidden === "طفا") {
+          forms.add("طفات");
+          forms.add("طفاو");
+          forms.add("يطفا");
+          forms.add("تطفا");
+        }
+
+        let found = false;
         for (const f of forms) {
           if (wordSet.has(f)) {
-            errors.push(`Line ${lineNum} mentions brand/product "${brand}".`);
+            errors.push(`Line ${lineNum} uses forbidden word "${forbidden}".`);
+            found = true;
             break;
+          }
+        }
+
+        // Also check if word contains forbidden substring when block_substrings is true
+        if (!found && blockSubstrings && normForbidden.length >= 3) {
+          for (const w of words) {
+            if (w.includes(normForbidden) && w !== normForbidden) {
+              errors.push(
+                `Line ${lineNum} uses word "${w}" containing forbidden "${forbidden}".`
+              );
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (noNumbersPricesBrands) {
+      // Number words check
+      for (const numWord of NUMBER_WORDS) {
+        const forms = buildWordForms(normalizeArabicText(numWord));
+        for (const f of forms) {
+          if (wordSet.has(f)) {
+            errors.push(`Line ${lineNum} uses number word "${numWord}" (no numbers allowed).`);
+            break;
+          }
+        }
+      }
+
+      // Price words check
+      for (const priceTerm of PRICE_TERMS) {
+        const normPrice = normalizeArabicText(priceTerm);
+        const forms = buildWordForms(normPrice);
+        for (const f of forms) {
+          if (wordSet.has(f)) {
+            errors.push(`Line ${lineNum} mentions price/currency term "${priceTerm}".`);
+            break;
+          }
+        }
+      }
+
+      // Brand/product names check
+      for (const brand of BRAND_OR_PRODUCT_TERMS) {
+        const normBrand = normalizeArabicText(brand);
+        if (normBrand.includes(" ")) {
+          if (normLine.includes(normBrand)) {
+            errors.push(`Line ${lineNum} mentions brand/product "${brand}".`);
+          }
+        } else {
+          const forms = buildWordForms(normBrand);
+          for (const f of forms) {
+            if (wordSet.has(f)) {
+              errors.push(`Line ${lineNum} mentions brand/product "${brand}".`);
+              break;
+            }
           }
         }
       }

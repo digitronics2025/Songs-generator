@@ -1,10 +1,100 @@
 import type { AdminFeeling } from "../lib/lyricQuality.ts";
+import type { ProposedLyric, RepairLogEntry } from "../lib/songRepair.ts";
 
-export type SongStatus = "pending" | "generating" | "ready" | "error";
+export type SongStatus =
+  | "draft"
+  | "lyric_approved"
+  | "generating"
+  | "ready"
+  | "approved"
+  | "failed"
+  | "needs_person"
+  | "archived";
+
+export interface SongTake {
+  id: string;
+  take_number: number;
+  model: string;
+  storage_path: string;
+  download_url?: string | null;
+  duration_seconds: number;
+  lufs: number;
+  true_peak_db: number;
+  words_heard_pct: number | null;
+  missing_words: string[];
+  extra_words: string[];
+  voice_start: number | null;
+  voice_end: number | null;
+  cost_estimate: number;
+  created_at: string;
+  status: "ready" | "failed";
+  ownerId: string;
+  tempo_bpm?: number;
+}
+
+export interface SongHistoryItem {
+  id: string;
+  song_id: string;
+  song_number: number;
+  title: string;
+  lines: string[];
+  admin_feeling: string;
+  action: "created" | "edited" | "archived" | "restored" | "migrated" | "lyric_approved";
+  timestamp: string;
+  ownerId: string;
+}
+
+export interface StudioSettings {
+  feelings: string[];
+  lines_per_song: number;
+  max_words_per_line: number;
+  forbidden_words: string[];
+  block_substrings: boolean;
+  no_numbers_prices_brands: boolean;
+  default_model: string;
+  target_length: number;
+  updated_at: string;
+  ownerId: string;
+}
+
+export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
+  feelings: [
+    "mothers_care",
+    "fathers_pride",
+    "family_evening",
+    "ramadan_ftour",
+    "eid_morning",
+    "calling_home",
+    "summer_at_home",
+    "new_home",
+  ],
+  lines_per_song: 6,
+  max_words_per_line: 5,
+  forbidden_words: [
+    "عيد",
+    "رمضان",
+    "اليوم",
+    "أحسن",
+    "لمة",
+    "طفا",
+    "نقيين",
+    "الصابون",
+    "البرنامج",
+    "بلاصتها",
+    "ليل ونهار",
+  ],
+  block_substrings: true,
+  no_numbers_prices_brands: true,
+  default_model: "lyria-3-clip-preview",
+  target_length: 30,
+  updated_at: new Date().toISOString(),
+  ownerId: "contact@tenten.ma",
+};
 
 export interface SongSpec {
   number: number;
   feeling_key: string;
+  admin_feeling: AdminFeeling;
   title: string;
   theme: string;
   lines: string[];
@@ -14,31 +104,56 @@ export interface SongSpec {
   vocal_tone: string;
 }
 
-export interface SongState extends SongSpec {
-  admin_feeling: AdminFeeling;
-  model_used: string | null;
+export interface SongState {
+  id: string;
+  number: number;
+  title: string;
+  lines: string[];
+  admin_feeling: string;
+  feeling_key: string;
+  theme: string;
+  mood: string;
+  tempo_bpm: number;
+  instruments: string;
+  vocal_tone: string;
   status: SongStatus;
-  duration_seconds: number | null;
-  lufs: number | null;
-  true_peak_db: number | null;
-  file_name: string;
-  storage_path: string | null;
-  download_url: string | null;
-  generated_at: string | null;
-  error_message: string | null;
-  words_heard_pct: number | null;
-  transcribed_text: string | null;
-  missing_words: string[];
-  extra_words: string[];
-  voice_start_seconds: number | null;
-  voice_end_seconds: number | null;
+  best_take_id: string | null;
+  created_at: string;
+  updated_at: string;
+  archived: boolean;
   ownerId: string;
+
+  // Resolved active audio & playback fields
+  model_used?: string | null;
+  duration_seconds?: number | null;
+  lufs?: number | null;
+  true_peak_db?: number | null;
+  file_name?: string;
+  storage_path?: string | null;
+  download_url?: string | null;
+  generated_at?: string | null;
+  error_message?: string | null;
+  words_heard_pct?: number | null;
+  transcribed_text?: string | null;
+  missing_words?: string[];
+  extra_words?: string[];
+  voice_start_seconds?: number | null;
+  voice_end_seconds?: number | null;
+  takes?: SongTake[];
+  repair_logs?: RepairLogEntry[];
+  proposed_lyric?: ProposedLyric | null;
+  needs_person_reason?: string | null;
+  automatic_takes_today?: number;
+  last_take_date?: string | null;
+  approved_take_id?: string | null;
+  daily_budget_usd?: number | null;
 }
 
 export interface SongsJsonEntry {
+  id: string;
   number: number;
   feeling_key: string;
-  admin_feeling: AdminFeeling;
+  admin_feeling: string;
   title: string;
   theme: string;
   lyric: string;
@@ -53,7 +168,11 @@ export interface SongsJsonEntry {
   voice_end_seconds: number | null;
 }
 
-export function formatSongFilename(number: number, feelingKey: string, ext: "wav" | "mp3" = "wav"): string {
+export function formatSongFilename(
+  number: number,
+  feelingKey: string,
+  ext: "wav" | "mp3" = "wav"
+): string {
   const padded = String(number).padStart(2, "0");
   return `${padded}-${feelingKey}.${ext}`;
 }
@@ -68,13 +187,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 1,
     feeling_key: "mothers_prayers",
+    admin_feeling: "mothers_care",
     title: "دعاوي الواليدة",
     theme: "a mother's prayers that follow you everywhere",
     lines: [
-      "دعاوي الواليدة ديما تابعة خطواتي",
-      "فين ما مشيت كنلقى بركتها معايا",
-      "رضاها ضو كينور كاع طريق حياتي",
-      "الله يخليك ليا يا تاج راسي",
+      "دعاوي الواليدة معايا",
+      "فين ما مشيت",
+      "كنحس بيها حدايا",
+      "رضاها ضو طريقي",
+      "وكلمتها كتقويني",
+      "يا ربي خليها ليا",
     ],
     mood: "Tender & grateful",
     tempo_bpm: 76,
@@ -84,13 +206,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 2,
     feeling_key: "fathers_effort",
+    admin_feeling: "fathers_pride",
     title: "تعب الواليد",
     theme: "a father who worked hard all his life for us",
     lines: [
-      "تعب الواليد باين ف يديه الصابرة",
-      "خرج من الصباح باش يفرحنا فالدار",
-      "عمرنا ما نسينا خيره ووقفته معانا",
-      "اليوم نردو الفرحة لقلبه الكبير",
+      "يدين بابا تعبانين",
+      "خرج بكري للخدمة",
+      "باش ما نخصو والو",
+      "كبرنا ونتا صابر",
+      "دابا جا دورنا",
+      "نردو ليك الفرحة",
     ],
     mood: "Respectful & heartfelt",
     tempo_bpm: 74,
@@ -100,13 +225,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 3,
     feeling_key: "grandparents",
+    admin_feeling: "family_evening",
     title: "دار جدتي",
     theme: "grandmother's stories and her warm house",
     lines: [
-      "دار جدتي عامرة بحكايات زمان الزينة",
-      "ريحة الخبز السخون وضحكتها الحنينة",
-      "كنجلسو حداها وننساو هموم الدنيا",
-      "بركة الكبار كتبقى ديما ف قلوبنا",
+      "دار جدتي دافية",
+      "الحكايات قبل النعاس",
+      "يديها فيهم البركة",
+      "والخبز سخون فالفران",
+      "كنرجعو ليها صغار",
+      "جدتي نوارة قلوبنا",
     ],
     mood: "Nostalgic & comforting",
     tempo_bpm: 72,
@@ -116,13 +244,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 4,
     feeling_key: "far_from_home",
-    title: "صوتكم كيوصلني",
+    admin_feeling: "calling_home",
+    title: "التيليفون كيقربنا",
     theme: "calling family on the phone from far away, hearing their voice",
     lines: [
-      "صوتكم كيوصلني واخا الغربة بعيدة بزاف",
-      "مكالمة وحدة منكم كترد ليا الروح",
-      "توحشت لمتنا على طبلة وحدة فالدار",
-      "قريب نرجع ونفرحو كاملين كيف ديما",
+      "بيناتنا بحر وبلاد",
+      "والتيليفون كيقربنا",
+      "كتقولي واش كليتي",
+      "كنضحك وعيني دامعة",
+      "قلبي ساكن معاكم",
+      "حتى يجمعنا اللقا",
     ],
     mood: "Longing turning hopeful",
     tempo_bpm: 75,
@@ -132,13 +263,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 5,
     feeling_key: "siblings",
+    admin_feeling: "family_evening",
     title: "خويا سندي",
     theme: "my brother/sister is my support",
     lines: [
-      "خويا سندي وكتفي ف وقت الضيق",
-      "ضحكنا كبر مع بعضنا ف نفس الدار",
-      "واخا نبعدو كيبقى الدم ديما جامعنا",
-      "الله يخلي خوتي عزوتي طول العمر",
+      "خويا يا سندي",
+      "طحت ورفدتيني",
+      "كبرنا فنفس البيت",
+      "وتقاسمنا الخبزة",
+      "ختي ضحكة الدار",
+      "حنا ديما يد وحدة",
     ],
     mood: "Warm & supportive",
     tempo_bpm: 84,
@@ -148,13 +282,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 6,
     feeling_key: "childhood_friends",
+    admin_feeling: "family_evening",
     title: "صحاب الدرب",
     theme: "friends from the neighbourhood, memories of playing outside",
     lines: [
-      "صحاب الدرب واللعب تحت شمس العشية",
-      "كنا صغار والضحكة طالعة من القلب",
-      "كبرنا وبقات ديك الذكريات حية فينا",
-      "فين ما تلاقينا كترجع لينا الفرحة",
+      "صحاب الدرب القدام",
+      "الكورة والضحك برا",
+      "كبرنا وتفرقنا شوية",
+      "والقلب باقي كيعقل",
+      "نتلاقاو ونرجعو صغار",
+      "صحبة ما كتنساش",
     ],
     mood: "Playful & nostalgic",
     tempo_bpm: 92,
@@ -164,13 +301,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 7,
     feeling_key: "true_friend",
+    admin_feeling: "calling_home",
     title: "صاحبي ف الشدة",
     theme: "the friend who stayed in hard times",
     lines: [
-      "صاحبي ف الشدة بقى واقف بجنبي",
-      "ما تبدلش عليا نهار ضاقت الدنيا",
-      "كلمة زوينة منو هونت كل صعيب",
-      "الصاحب الوفي رزق من عند الله",
+      "فالشدة عيطت عليك",
+      "جيتي بلا ما نطلب",
+      "وقفتي معايا حتى ناضيت",
+      "الصاحب الصح باين",
+      "كلامك كيكفيني",
+      "ربي يدوم صحبتنا",
     ],
     mood: "Sincere & reassuring",
     tempo_bpm: 78,
@@ -180,13 +320,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 8,
     feeling_key: "first_rain",
+    admin_feeling: "family_evening",
     title: "الشتا الأولى",
     theme: "the smell of the first rain, children at the window",
     lines: [
-      "الشتا الأولى طاحت وفاحت ريحة التراب",
-      "الدراري حدا الشرجم فرحانين بالقطرات كيطيحو",
-      "غسلات الجو وجابت معاها الخير والبركة",
-      "غدا يكون أخضر وزين بإذن الله",
+      "الشتا الأولى جات",
+      "ريحة التراب فالزنقة",
+      "الصغار حدا الشرجم",
+      "كيحسبو النقط بفرحة",
+      "والدار دافية بينا",
+      "خير نازل من السما",
     ],
     mood: "Gentle wonder & joy",
     tempo_bpm: 82,
@@ -196,13 +339,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 9,
     feeling_key: "winter_warmth",
+    admin_feeling: "family_evening",
     title: "دفا الدار",
     theme: "cold outside, warm home and tea together",
     lines: [
-      "دفا الدار كينسينا برد الليل الطويل",
-      "براد أتاي مشحر والعائلة مجموعة حدا بعضها",
-      "هدرة حلوة وضحكة دافية ترد البال مرتاح",
-      "ما كاين ما حسن من لمتنا فالبرد",
+      "البرد قاصح برا",
+      "وحنا تحت البطانية",
+      "الماما جابت البيصارة",
+      "والحكايات بلا نهاية",
+      "الدفا فقلوبنا",
+      "دارنا هي الأمان",
     ],
     mood: "Cozy & peaceful",
     tempo_bpm: 73,
@@ -212,13 +358,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 10,
     feeling_key: "summer_sea",
+    admin_feeling: "summer_at_home",
     title: "صيف البحر",
     theme: "summer holidays, family at the beach",
     lines: [
-      "صيف البحر وموجه الأزرق كينادي علينا",
-      "العائلة فرحانة والرملة سخونة تحت رجلينا",
-      "ضحك ولعب ونهار زوين بلا حساب",
-      "الصيف مع الحباب أحلى وقت فالعام",
+      "جينا للبحر كاملين",
+      "الرملة سخونة والموج",
+      "الصغار كيجريو ويضحكو",
+      "بابا كيعوم معاهم",
+      "والماما تحت الظل",
+      "صيف كيبقى فالبال",
     ],
     mood: "Sunny & joyful",
     tempo_bpm: 96,
@@ -228,13 +377,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 11,
     feeling_key: "new_morning",
+    admin_feeling: "new_home",
     title: "صباح جديد",
     theme: "a fresh morning, a new start",
     lines: [
-      "صباح جديد فتح بابو بضو الشمس",
-      "نسيم الفجر كيبشر بيوم كله خير",
-      "نوض بالنية الصافية والابتسامة على وجهك",
-      "كل نهار فرصة زوينة نبداو من جديد",
+      "صباح جديد بدا",
+      "الشمس دخلات الشرجم",
+      "نسينا تعب البارح",
+      "وفتحنا قلب جديد",
+      "خطوة بخطوة نوصلو",
+      "الخير جاي لينا",
     ],
     mood: "Fresh & optimistic",
     tempo_bpm: 88,
@@ -244,13 +396,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 12,
     feeling_key: "graduation",
+    admin_feeling: "mothers_care",
     title: "نجحت يا مي",
     theme: "passing the exam, parents' proud tears",
     lines: [
-      "نجحت يا مي وشوفي دموع الفرحة",
-      "سهر الليالي والتعب كامل جاب ثمارو",
-      "فرحتكم بيا هي أكبر جائزة فحياتي",
-      "دابا نبداو طريق جديد وراسي مرفوع",
+      "نجحت يا مي",
+      "الورقة فيدي",
+      "دموعك ديال الفرح",
+      "سهرتي معايا بزاف",
+      "هاد النجاح ديالك",
+      "وكل تعبك ما ضاع",
     ],
     mood: "Proud & uplifting",
     tempo_bpm: 90,
@@ -260,13 +415,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 13,
     feeling_key: "first_salary",
+    admin_feeling: "mothers_care",
     title: "أول خلصة",
     theme: "first salary, buying a gift for the parents",
     lines: [
-      "أول خلصة جاتني وفكرت ف الدار",
-      "شريت هدية بسيطة للواليدة والواليد العزيز",
-      "فرحتهم صغيرة ولكن معناها عندي كبير",
-      "الرزق الحلال كيحلى ملي يتقسم مع الحباب",
+      "أول خلصة فجيبي",
+      "دخلت للدار فرحان",
+      "هدية صغيرة لماما",
+      "عنقاتني وضحكات",
+      "قالت كبرتي يا وليدي",
+      "فرحتها هي الكنز",
     ],
     mood: "Grateful & proud",
     tempo_bpm: 86,
@@ -276,13 +434,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 14,
     feeling_key: "small_dream",
+    admin_feeling: "new_home",
     title: "حلمي الصغير",
     theme: "starting a small business from nothing",
     lines: [
-      "حلمي الصغير بديتو من والو بيديا",
-      "خطوة بخطوة والصبر زادني قوة كبيرة",
-      "واخا الطريق طويل الأمل ديما قدامي",
-      "غادي نوصل بالعمل والنية الصافية ديما",
+      "حلمي صغير فالبداية",
+      "حانوت وباب مفتوح",
+      "خدمت بالصبر والنية",
+      "كل صباح نزيد شوية",
+      "الحلم كيكبر معايا",
+      "ربي كيفتح الأبواب",
     ],
     mood: "Determined & hopeful",
     tempo_bpm: 87,
@@ -292,13 +453,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 15,
     feeling_key: "falling_rising",
+    admin_feeling: "fathers_pride",
     title: "طحت ونضت",
     theme: "falling down and standing up again",
     lines: [
-      "طحت ونضت وتعلمت نقف على رجلي",
-      "الخسارة علماتني نصبر ونزيد القدام",
-      "الضلام كيدوز وكيجي موراه نهار ضاوي",
-      "أنا أقوى اليوم وغدا أحسن بزاف",
+      "طحت مرة ومرة",
+      "بابا قال لي نوض",
+      "الطيحة ماشي النهاية",
+      "نفضت الغبرة ومشيت",
+      "وقلبي ولا قوي",
+      "شكرا على يدك",
     ],
     mood: "Resilient & uplifting",
     tempo_bpm: 85,
@@ -308,13 +472,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 16,
     feeling_key: "patience",
+    admin_feeling: "fathers_pride",
     title: "الصبر مفتاح",
     theme: "patience in hard days, better days are coming",
     lines: [
-      "الصبر مفتاح كل باب مسدود اليوم",
-      "واخا الأيام صعيبة الفرج قريب كيجي",
-      "خلي قلبك هاني وزيد خطوة لقدام",
-      "بعد الشدة ديما كتجي أيام الفرح",
+      "الأيام صعيبة شوية",
+      "بابا قال صبر",
+      "الصبر مفتاح الفرج",
+      "الغيمة كتدوز ديما",
+      "والشمس كترجع تبان",
+      "غدا يكون زوين",
     ],
     mood: "Calm & hopeful",
     tempo_bpm: 74,
@@ -324,13 +491,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 17,
     feeling_key: "wedding_joy",
+    admin_feeling: "eid_morning",
     title: "فرحة العرس",
     theme: "a family wedding, everyone happy together",
     lines: [
-      "فرحة العرس ضوات الدار بالزغاريد والضحك",
-      "العائلة كلها مجموعة لابسة أحسن ما كاين",
-      "دقة خفيفة وفرحة طالعة من كل قلب",
-      "الله يكمل بالخير ويدوم الفرح ديما",
+      "الدار مزوقة بالنوار",
+      "الزغاريد فكل جيهة",
+      "العروسة بحال القمر",
+      "الحبايب جاو كاملين",
+      "الطبل والفرح يشطح",
+      "ربي يتمم بالخير",
     ],
     mood: "Festive & joyful",
     tempo_bpm: 98,
@@ -340,13 +510,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 18,
     feeling_key: "new_baby",
+    admin_feeling: "new_home",
     title: "ضيف جديد",
     theme: "a new baby arrives in the house",
     lines: [
-      "ضيف جديد نور الدار ببسمة بريئة",
-      "يديه صغار وجاب معاه فرحة كبيرة",
-      "كل واحد فالعائلة فرحان وبغا يهزو",
-      "يكبر ف عزنا ويتربى فالمحبة والخير",
+      "ضيف صغير وصل",
+      "عينيه كيضويو الدار",
+      "ماما كتغني ليه",
+      "وبابا ما كينعسش",
+      "يدو صغيرة فيدي",
+      "مرحبا بيك يا قلبي",
     ],
     mood: "Sweet & tender",
     tempo_bpm: 78,
@@ -356,13 +529,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 19,
     feeling_key: "eid_together",
-    title: "العيد فالدار",
+    admin_feeling: "eid_morning",
+    title: "طبلة الصباح",
     theme: "Eid morning, the whole family at one table",
     lines: [
-      "العيد فالدار والطبلة عامرة بالخير والحلوى",
-      "التسامح والمحبة والضحكة دايرة بين الحباب",
-      "الكبار والصغار فرحانين بهاد الصباح الزين",
-      "كل عام وحنا مجموعين على خير",
+      "طبلة الصباح عامرة",
+      "الملوي والمسمن سخون",
+      "الجلابة جديدة ومكوية",
+      "الدراري كيبوسو اليدين",
+      "الأهل كاملين حاضرين",
+      "فرحة كتجمعنا",
     ],
     mood: "Warm & celebratory",
     tempo_bpm: 92,
@@ -372,13 +548,16 @@ export const INITIAL_SONGS: SongSpec[] = [
   {
     number: 20,
     feeling_key: "small_gift",
+    admin_feeling: "fathers_pride",
     title: "هدية صغيرة",
     theme: "a small gift that says \"I remember you\"",
     lines: [
-      "هدية صغيرة كتقول ليك راني تفكرتك",
-      "ماشي بالقيمة ولكن بالمحبة اللي فيها",
-      "ابتسامة على وجهك تساوي الدنيا كاملة",
-      "الحباب يستاهلو كل كلمة طيبة منا",
+      "هدية صغيرة فيدي",
+      "لبابا اللي عطا بزاف",
+      "ماشي غالية بالثمن",
+      "غالية بالمعنى",
+      "قلت ليه ما نسيتكش",
+      "وضحكتو كانت الجواب",
     ],
     mood: "Affectionate & gentle",
     tempo_bpm: 80,
