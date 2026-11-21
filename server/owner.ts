@@ -1,7 +1,7 @@
 import { json, Router, type Request } from "express";
 import { z } from "zod";
 import type { FirebaseServices } from "./config.ts";
-import { ownerAuth } from "./auth.ts";
+import { ownerAuth, type OwnerAuthenticator } from "./auth.ts";
 import { assertLyrics, createSongs, importRecords, library, mutateSong, proposeDrafts, selectTake, serializeHistory } from "./catalog.ts";
 import { HttpError } from "./errors.ts";
 import { generateTake, generationStatus } from "./generation.ts";
@@ -15,10 +15,10 @@ import { checkedObjectPath, downloadAudio, storagePathFromUrl } from "./storage.
 function emptyBody(req: Request) { empty.parse(req.body ?? {}); }
 function emptyQuery(req: Request) { empty.parse(req.query); }
 
-export function ownerRouter(services: FirebaseServices, emails: string[]) {
-  const { auth, db, bucket } = services;
+export function ownerRouter(services: FirebaseServices, authenticate: OwnerAuthenticator) {
+  const { db, bucket } = services;
   const api = Router();
-  api.use(ownerAuth((token) => auth.verifyIdToken(token, true), emails));
+  api.use(ownerAuth(authenticate));
   api.use(json({ limit: "2mb", strict: true }));
   api.use((req, res, next) => {
     res.set("Cache-Control", "no-store");

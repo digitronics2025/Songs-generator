@@ -7,6 +7,7 @@ import { masterWav } from "./audio.ts";
 import { assertLyrics, takeProjection } from "./catalog.ts";
 import type { FirebaseServices } from "./config.ts";
 import { HttpError } from "./errors.ts";
+import { DATA_CONFIGURATION, firebaseDataUnavailable } from "./firebaseErrors.ts";
 import { assertGeminiEnabled, Gemini } from "./gemini.ts";
 import { checkBudget, checkGenerationLimits, dayKey, LEASE_MS } from "./limits.ts";
 import { historyRecord, legacyTakes, lyricRevision } from "./migration.ts";
@@ -163,12 +164,14 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
     failure = error;
   }
 
+  const accessFailed = firebaseDataUnavailable(failure);
+  const failureMessage = failure instanceof HttpError ? failure.message : accessFailed ? DATA_CONFIGURATION : null;
   const failures = suggested ? [] : [...audioFailures(metrics), ...(failure ? ["PROCESSING_ERROR"] : [])];
   const success = !failure && !failures.length && Boolean(storage);
   const status = suggested ? "draft" : success ? "ready" : "failed";
   if (repairAction || failures.length) {
     note(repairAction?.reason ?? failures.join(", "), repairAction?.type ?? "Generated a take",
-      failure instanceof HttpError ? failure.message : status);
+      failureMessage ?? status);
   }
 
   await db.runTransaction(async (tx) => {
@@ -187,7 +190,7 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
       ...(promote ? takeProjection(takeData) : {}),
       ...(suggested ? { title: suggested.title, lines: suggested.lines, proposed_lyric: suggested } : {}),
       status: wasApproved ? "approved" : status,
-      error_message: failure instanceof HttpError ? failure.message : failure ? "Audio processing failed." : null,
+      error_message: failureMessage ?? (failure ? "Audio processing failed." : null),
       updated_at: updatedAt,
     };
     tx.update(ref, patch);
@@ -200,7 +203,7 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
     tx.set(lock, { token, expires_at: 0 });
   });
 
-  if (failure instanceof HttpError) throw failure;
+  if (failure instanceof HttpError || accessFailed) throw failure;
   if (failure) throw new HttpError(502, "Audio processing failed. The take and repair log have been recorded.");
   return { status: song.status === "approved" ? "approved" : status, take_id: takeRef?.id ?? null };
 }

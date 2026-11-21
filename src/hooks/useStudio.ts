@@ -16,6 +16,7 @@ export function useStudio() {
   const [authLoading, setAuthLoading] = useState(false);
   const [catalog, setCatalog] = useState<Library | null>(null);
   const [loading, setLoading] = useState(true);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
   const pending = useRef<AbortController | null>(null);
   const refresh = useCallback(async () => {
@@ -25,11 +26,19 @@ export function useStudio() {
     pending.current = controller;
     try {
       const data = await studioApi<Library>("/library", "GET", undefined, controller.signal);
-      if (!controller.signal.aborted) setCatalog(data);
+      if (!controller.signal.aborted) {
+        setCatalog(data);
+        setLibraryError(null);
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
-      if (error instanceof ApiError && error.status === 403) await signOut(auth);
-      setGlobalError(error instanceof Error ? error.message : "Could not load the studio library.");
+      const message = error instanceof Error ? error.message : "Could not load the studio library.";
+      if (error instanceof ApiError && error.status === 403) {
+        await signOut(auth);
+        setGlobalError(message);
+      } else {
+        setLibraryError(message);
+      }
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
@@ -38,6 +47,7 @@ export function useStudio() {
     const unsubscribe = onAuthStateChanged(auth, (current) => {
       pending.current?.abort();
       setCatalog(null);
+      setLibraryError(null);
       setUser(current);
       setAuthReady(true);
       setLoading(Boolean(current));
@@ -58,5 +68,5 @@ export function useStudio() {
   };
   return { user, authReady, authLoading, handleSignIn, handleSignOut: () => signOut(auth),
     songs: catalog?.songs ?? [], historyItems: catalog?.history ?? [], settings: catalog?.settings ?? DEFAULT_STUDIO_SETTINGS,
-    loading, globalError, setGlobalError, refresh };
+    loading, libraryLoaded: catalog !== null, libraryError, globalError, setGlobalError, refresh };
 }
