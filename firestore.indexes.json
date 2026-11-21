@@ -1,0 +1,29 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "songs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "updated_at",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": [
+    {
+      "collectionGroup": "studio_embeddings",
+      "fieldPath": "values",
+      "indexes": []
+    }
+  ]
+}

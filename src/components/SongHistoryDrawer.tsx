@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { History, X, Search, FileText, Calendar } from "lucide-react";
+import { History, X, Calendar } from "lucide-react";
 import type { SongHistoryItem } from "../data/songs";
 
 interface SongHistoryDrawerProps {
@@ -54,7 +54,7 @@ export function SongHistoryDrawer({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-end bg-black/40 backdrop-blur-xs">
-      <div className="relative flex h-full w-full max-w-xl flex-col bg-white shadow-2xl">
+      <div role="dialog" aria-modal="true" aria-label="Song history" className="relative flex h-full w-full max-w-xl flex-col bg-white shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#ECEBE6] px-6 py-4">
           <div className="flex items-center gap-2">
@@ -102,6 +102,7 @@ export function SongHistoryDrawer({
               <option value="edited">edited</option>
               <option value="archived">archived</option>
               <option value="restored">restored</option>
+              <option value="imported">Imported</option>
               <option value="migrated">migrated</option>
             </select>
           </div>

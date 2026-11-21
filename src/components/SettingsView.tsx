@@ -40,6 +40,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
   const [defaultModel, setDefaultModel] = useState(
     settings.default_model || "lyria-3-clip-preview"
   );
+  const [budget, setBudget] = useState(settings.daily_budget_usd);
   const [targetLength, setTargetLength] = useState(settings.target_length || 30);
 
   const [isSaving, setIsSaving] = useState(false);
@@ -90,6 +91,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
     setBlockSubstrings(DEFAULT_STUDIO_SETTINGS.block_substrings);
     setNoNumbersPricesBrands(DEFAULT_STUDIO_SETTINGS.no_numbers_prices_brands);
     setDefaultModel(DEFAULT_STUDIO_SETTINGS.default_model);
+    setBudget(DEFAULT_STUDIO_SETTINGS.daily_budget_usd);
     setTargetLength(DEFAULT_STUDIO_SETTINGS.target_length);
     setError(null);
   };
@@ -108,9 +110,10 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
         block_substrings: blockSubstrings,
         no_numbers_prices_brands: noNumbersPricesBrands,
         default_model: defaultModel,
-        target_length: Math.max(10, Math.min(120, Math.round(targetLength))),
+        target_length: Math.max(28, Math.min(44, Math.round(targetLength))),
+        daily_budget_usd: budget,
         updated_at: new Date().toISOString(),
-        ownerId: settings.ownerId || "contact@tenten.ma",
+        ownerId: settings.ownerId,
       };
 
       await onSaveSettings(updated);
@@ -207,7 +210,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
           <div className="mt-3 flex max-w-sm gap-2">
             <input
               type="text"
-              value={newFeeling}
+              aria-label="New feeling" value={newFeeling}
               onChange={(e) => setNewFeeling(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -216,7 +219,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
                 }
               }}
               placeholder="e.g. morning_tea"
-              className="font-mono flex-1 rounded-lg border border-[#D4D2CA] bg-white px-3 py-1.5 text-xs text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
+              className="font-mono min-w-0 flex-1 rounded-lg border border-[#D4D2CA] bg-white px-3 py-1.5 text-xs text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
             />
             <button
               type="button"
@@ -311,7 +314,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
             <input
               type="text"
               dir="rtl"
-              value={newForbiddenWord}
+              aria-label="New forbidden word" value={newForbiddenWord}
               onChange={(e) => setNewForbiddenWord(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") {
@@ -320,7 +323,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
                 }
               }}
               placeholder="أضف كلمة ممنوعة..."
-              className="font-arabic flex-1 rounded-lg border border-[#D4D2CA] bg-white px-3 py-1.5 text-sm text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
+              className="font-arabic min-w-0 flex-1 rounded-lg border border-[#D4D2CA] bg-white px-3 py-1.5 text-sm text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
             />
             <button
               type="button"
@@ -371,6 +374,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
                 Default Generation Model
               </label>
               <select
+                aria-label="Default generation model"
                 value={defaultModel}
                 onChange={(e) => setDefaultModel(e.target.value)}
                 className="mt-1 w-full rounded-lg border border-[#D4D2CA] bg-white px-3 py-2 text-sm text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
@@ -382,20 +386,27 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
               </select>
             </div>
 
+            <label className="block text-xs font-semibold text-[#57554F]">
+              Daily Gemini budget (USD, resets at 00:00 UTC)
+              <input type="number" min={0} max={1000} step={0.01} value={budget}
+                onChange={(event) => setBudget(Number(event.target.value))}
+                className="mt-1 w-full rounded-lg border border-[#D4D2CA] bg-white px-3 py-2" />
+            </label>
             <div>
               <label className="block text-xs font-semibold text-[#57554F]">
                 Target Audio Clip Duration (seconds)
               </label>
               <input
                 type="number"
-                min={15}
-                max={60}
+                min={28}
+                max={44}
+                aria-label="Target audio clip duration in seconds"
                 value={targetLength}
                 onChange={(e) => setTargetLength(Number(e.target.value))}
                 className="font-mono mt-1 w-full rounded-lg border border-[#D4D2CA] bg-white px-3 py-2 text-sm font-semibold text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
               />
               <p className="mt-1 text-[11px] text-[#706E67]">
-                Mastered automatically with FFmpeg to -14 LUFS and max -1.0 dBTP.
+                Mastering targets -14 LUFS and -1.0 dBTP.
               </p>
             </div>
           </div>

@@ -10,7 +10,8 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
-import type { SongState, StudioSettings } from "../data/songs";
+import { MAX_DRAFT_BATCH, type SongState, type StudioSettings } from "../data/songs";
+import { studioApi } from "../lib/api";
 import { countLineWords, validateLyrics } from "../lib/lyricQuality";
 
 interface BatchGeneratorModalProps {
@@ -32,10 +33,10 @@ interface BatchGeneratorModalProps {
       isApproved: boolean;
     }>
   ) => Promise<void>;
-  idToken: string;
 }
 
 interface DraftItem {
+  closest_match_pct: number;
   id: string;
   selected: boolean;
   expanded: boolean;
@@ -56,7 +57,6 @@ export function BatchGeneratorModal({
   settings,
   existingSongs,
   onAddBatch,
-  idToken,
 }: BatchGeneratorModalProps) {
   const [count, setCount] = useState(5);
   const [selectedFeelings, setSelectedFeelings] = useState<Set<string>>(
@@ -124,55 +124,15 @@ export function BatchGeneratorModal({
     setError(null);
     setDrafts([]);
 
-    const usedSongs = existingSongs
-      .filter((s) => !s.archived)
-      .map((s) => ({
-        admin_feeling: s.admin_feeling,
-        title: s.title,
-        first_line: s.lines[0] || "",
-      }));
-
     try {
-      const res = await fetch("/api/songs/batch-generate", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          count,
-          feelings: Array.from(selectedFeelings),
-          settings,
-          used_songs: usedSongs,
-        }),
+      type GeneratedDraft = Omit<DraftItem, "id" | "selected" | "expanded">;
+      const data = await studioApi<{ drafts: GeneratedDraft[]; failures: string[] }>("/songs/drafts", "POST", {
+        count, feelings: [...selectedFeelings],
       });
-
-      if (!res.ok) {
-        const errJson = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(errJson.error || `Batch generation failed (${res.status})`);
-      }
-
-      const data = (await res.json()) as { drafts: any[] };
-      if (!Array.isArray(data.drafts) || data.drafts.length === 0) {
-        throw new Error("No drafts were returned. Please try again.");
-      }
-
-      const items: DraftItem[] = data.drafts.map((d, i) => ({
-        id: `draft_${Date.now()}_${i}`,
-        selected: true,
-        expanded: i === 0,
-        title: d.title,
-        lines: d.lines,
-        theme: d.theme,
-        mood: d.mood,
-        tempo_bpm: d.tempo_bpm,
-        instruments: d.instruments,
-        vocal_tone: d.vocal_tone,
-        feeling_key: d.feeling_key,
-        admin_feeling: d.admin_feeling,
-      }));
-
-      setDrafts(items);
+      setDrafts(data.drafts.map((draft, i) => ({
+        ...draft, id: "draft_" + i, selected: true, expanded: i === 0,
+      })));
+      if (data.failures.length) setError(data.failures.join(" "));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate batch");
     } finally {
@@ -226,13 +186,13 @@ export function BatchGeneratorModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
-      <div className="relative flex max-h-[92vh] w-full max-w-3xl flex-col rounded-2xl border border-[#E5E4DF] bg-white shadow-2xl">
+      <div role="dialog" aria-modal="true" aria-label="Batch Song Generator" className="relative flex max-h-[92vh] w-full max-w-3xl flex-col rounded-2xl border border-[#E5E4DF] bg-white shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#ECEBE6] px-6 py-4">
           <div className="flex items-center gap-2">
             <Layers className="h-5 w-5 text-[#1B3B6F]" />
             <h2 className="text-lg font-bold text-[#141413]">
-              Batch Song Generator (1–20)
+              Batch Song Generator
             </h2>
           </div>
           <button
@@ -262,12 +222,12 @@ export function BatchGeneratorModal({
                   <label className="text-xs font-semibold text-[#141413]">
                     Number of Songs to Generate ({count})
                   </label>
-                  <span className="font-mono text-xs text-[#6E6C66]">1 to 20</span>
+                  <span className="font-mono text-xs text-[#6E6C66]">1 to {MAX_DRAFT_BATCH}</span>
                 </div>
                 <input
                   type="range"
                   min={1}
-                  max={20}
+                  max={MAX_DRAFT_BATCH}
                   step={1}
                   value={count}
                   onChange={(e) => setCount(Number(e.target.value))}
@@ -278,7 +238,7 @@ export function BatchGeneratorModal({
                   <span>5 songs</span>
                   <span>10 songs</span>
                   <span>15 songs</span>
-                  <span>20 songs</span>
+                  <span>{MAX_DRAFT_BATCH} songs</span>
                 </div>
               </div>
 
@@ -422,6 +382,7 @@ export function BatchGeneratorModal({
                         </div>
 
                         <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-emerald-700">New ✓ · {draft.closest_match_pct}% closest match</span>
                           {check.valid ? (
                             <span className="inline-flex items-center gap-1 font-mono text-[11px] font-medium text-[#15803D]">
                               <CheckCircle2 className="h-3.5 w-3.5" />

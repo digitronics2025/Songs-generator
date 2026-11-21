@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { SongDetails } from "./SongDetails";
 import {
   Play,
   Pause,
@@ -7,15 +8,12 @@ import {
   Sparkles,
   Pencil,
   Check,
-  X,
   Download,
   AlertCircle,
-  AlertTriangle,
   Plus,
   Trash2,
   History,
   CheckCircle2,
-  Clock,
   ShieldCheck,
   Archive,
   ArchiveRestore,
@@ -53,6 +51,7 @@ interface SongRowProps {
   ) => Promise<void>;
   onApproveLyric: (songId: string) => Promise<void>;
   onApproveTake: (songId: string, takeId: string) => Promise<void>;
+  onChooseTake: (songId: string, takeId: string) => Promise<void>;
   onToggleArchive: (songId: string, archive: boolean) => Promise<void>;
   onViewHistory?: (songNumber: number) => void;
 }
@@ -83,6 +82,7 @@ export function SongRow({
   onSaveEdit,
   onApproveLyric,
   onApproveTake,
+  onChooseTake,
   onToggleArchive,
   onViewHistory,
 }: SongRowProps) {
@@ -113,7 +113,7 @@ export function SongRow({
     song.status === "lyric_approved" ||
     song.status === "ready" ||
     song.status === "approved" ||
-    song.status === "failed";
+    song.status === "failed" || song.status === "needs_person" || song.status === "generating";
 
   const startEdit = () => {
     setDraftTitle(song.title);
@@ -156,7 +156,7 @@ export function SongRow({
   };
 
   const paddedNumber = String(song.number).padStart(2, "0");
-  const isBusy = isGenerating || song.status === "generating";
+  const isBusy = isGenerating;
 
   return (
     <article
@@ -228,6 +228,7 @@ export function SongRow({
                 </span>
               </div>
 
+              {song.closest_match_pct !== undefined && <span className="text-xs text-emerald-700">New ✓ · {song.closest_match_pct}% closest match</span>}
               {/* Status Badges */}
               <div className="flex items-center gap-2 text-xs">
                 {isBusy ? (
@@ -364,6 +365,7 @@ export function SongRow({
               </div>
             )}
 
+            <SongDetails id={song.id} updatedAt={song.updated_at} />
             {/* Takes Drawer */}
             {takes.length > 0 && (
               <div className="mt-3 rounded-lg border border-[#ECEBE6] bg-[#FAF9F6] p-2.5">
@@ -374,7 +376,7 @@ export function SongRow({
                       Takes ({takes.length}):
                     </span>
                     <span className="text-[11px] text-[#6E6C66]">
-                      Best: {song.best_take_id || `take_1`}
+                      Best: {takes.find((take) => take.id === song.best_take_id)?.take_number ?? "unset"}
                     </span>
                   </div>
                   <button
@@ -389,9 +391,7 @@ export function SongRow({
                 {showTakesDrawer && (
                   <div className="mt-2 space-y-1.5 border-t border-[#ECEBE6] pt-2">
                     {takes.map((take) => {
-                      const isBest =
-                        song.best_take_id === take.id ||
-                        (!song.best_take_id && take.take_number === 1);
+                      const isBest = song.best_take_id === take.id;
                       return (
                         <div
                           key={take.id}
@@ -425,18 +425,28 @@ export function SongRow({
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <span className="text-[#6E6C66]">
+                            {take.true_peak_db?.toFixed(1) ?? "—"} dBTP · Voice {take.voice_start ?? "—"}–{take.voice_end ?? "—"} s
+                            {take.is_approved ? " · Approved" : ""} {take.failure_reasons?.join(", ")}
+                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
                             <button
                               type="button"
                               onClick={() => onTogglePlay(song, take)}
+                              disabled={!take.storage_path && !take.raw_storage_path}
                               className="rounded border border-[#D4D2CA] bg-white px-2 py-0.5 text-[11px] font-medium text-[#1B3B6F] hover:bg-[#F3F2EE]"
                             >
                               Play Take
                             </button>
-                            {!isBest && (
+                            {take.status === "ready" && take.storage_path && !isBest && (
+                              <button type="button"
+                                onClick={() => void onChooseTake(song.id, take.id).catch(() => undefined)}
+                                className="rounded border border-[#D4D2CA] px-2 py-0.5 text-[11px]">Choose best</button>
+                            )}
+                            {take.passed_all_checks && take.status === "ready" && !take.is_approved && (
                               <button
                                 type="button"
-                                onClick={() => onApproveTake(song.id, take.id)}
+                                onClick={() => void onApproveTake(song.id, take.id).catch(() => undefined)}
                                 className="rounded bg-[#1B3B6F] px-2.5 py-0.5 text-[11px] font-semibold text-white hover:bg-[#152E57]"
                               >
                                 Approve Take
@@ -445,8 +455,9 @@ export function SongRow({
                             <button
                               type="button"
                               onClick={() => onDownloadSingle(song, take)}
+                              disabled={!take.storage_path && !take.raw_storage_path}
                               className="rounded p-1 text-[#6E6C66] hover:text-[#141413]"
-                              title="Download Take WAV"
+                              aria-label={"Download take " + take.take_number} title="Download take"
                             >
                               <Download className="h-3.5 w-3.5" />
                             </button>
@@ -459,6 +470,7 @@ export function SongRow({
               </div>
             )}
 
+            {song.proposed_lyric && <p className="mt-2 text-xs text-[#57554F]">Lyric repair awaiting approval. {song.proposed_lyric.reason}</p>}
             {/* Lyrics Text or Edit Box */}
             {!editing ? (
               <div className="mt-3 grid gap-1.5 border-t border-[#F0EFEA] pt-2.5">
@@ -612,7 +624,7 @@ export function SongRow({
           {song.status === "draft" && (
             <button
               type="button"
-              onClick={() => void onApproveLyric(song.id)}
+              onClick={() => void onApproveLyric(song.id).catch(() => undefined)}
               disabled={!savedLyricCheck.valid}
               className="inline-flex items-center gap-1.5 rounded-lg bg-[#15803D] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#166534] disabled:opacity-50 whitespace-nowrap"
             >
@@ -693,7 +705,7 @@ export function SongRow({
 
             <button
               type="button"
-              onClick={() => void onToggleArchive(song.id, !song.archived)}
+              onClick={() => void onToggleArchive(song.id, !song.archived).catch(() => undefined)}
               className="rounded-md border border-[#D4D2CA] bg-white p-1.5 text-[#57554F] hover:border-[#DC2626] hover:text-[#DC2626]"
               title={song.archived ? "Restore from archive" : "Archive song"}
             >

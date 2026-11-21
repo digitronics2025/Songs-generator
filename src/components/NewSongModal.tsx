@@ -5,17 +5,15 @@ import {
   Loader2,
   Check,
   CheckCircle2,
-  AlertCircle,
-  Plus,
 } from "lucide-react";
-import type { SongState, StudioSettings } from "../data/songs";
+import type { StudioSettings } from "../data/songs";
+import { studioApi } from "../lib/api";
 import { countLineWords, validateLyrics } from "../lib/lyricQuality";
 
 interface NewSongModalProps {
   isOpen: boolean;
   onClose: () => void;
   settings: StudioSettings;
-  existingSongs: SongState[];
   onAddSong: (newSong: {
     title: string;
     lines: string[];
@@ -28,7 +26,6 @@ interface NewSongModalProps {
     feeling_key: string;
     isApproved: boolean;
   }) => Promise<void>;
-  idToken: string;
 }
 
 interface GeneratedOption {
@@ -41,6 +38,7 @@ interface GeneratedOption {
   vocal_tone: string;
   feeling_key: string;
   admin_feeling: string;
+  closest_match_pct: number;
   validation: { valid: boolean; errors: string[] };
 }
 
@@ -48,9 +46,7 @@ export function NewSongModal({
   isOpen,
   onClose,
   settings,
-  existingSongs,
   onAddSong,
-  idToken,
 }: NewSongModalProps) {
   const [selectedFeeling, setSelectedFeeling] = useState<string>(
     settings.feelings[0] || "mothers_care"
@@ -75,47 +71,15 @@ export function NewSongModal({
     setError(null);
     setGeneratedOptions([]);
 
-    // Collect existing titles & opening lines for this feeling for anti-collision
-    const usedSongsForFeeling = existingSongs.filter(
-      (s) => s.admin_feeling === selectedFeeling && !s.archived
-    );
-    const usedTitles = usedSongsForFeeling.map((s) => s.title);
-    const usedFirstLines = usedSongsForFeeling
-      .map((s) => s.lines[0])
-      .filter(Boolean);
-
     try {
-      const res = await fetch("/api/songs/generate-options", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${idToken}`,
-        },
-        body: JSON.stringify({
-          admin_feeling: selectedFeeling,
-          idea: idea.trim() || undefined,
-          mood: mood.trim() || undefined,
-          options_count: optionsCount,
-          settings,
-          used_titles: usedTitles,
-          used_first_lines: usedFirstLines,
-        }),
+      const data = await studioApi<{ drafts: GeneratedOption[]; failures: string[] }>("/songs/drafts", "POST", {
+        feelings: [selectedFeeling], count: optionsCount, idea: [idea.trim(), mood.trim()].filter(Boolean).join(" — "),
       });
-
-      if (!res.ok) {
-        const errJson = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(errJson.error || `Generation failed (${res.status})`);
-      }
-
-      const data = (await res.json()) as { options: GeneratedOption[] };
-      if (!Array.isArray(data.options) || data.options.length === 0) {
-        throw new Error("No options were returned. Please try again.");
-      }
-
-      setGeneratedOptions(data.options);
+      setGeneratedOptions(data.drafts);
       setSelectedIndex(0);
-      setDraftTitle(data.options[0].title);
-      setDraftLines(data.options[0].lines);
+      setDraftTitle(data.drafts[0].title);
+      setDraftLines(data.drafts[0].lines);
+      if (data.failures.length) setError(data.failures.join(" "));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to generate options");
     } finally {
@@ -169,7 +133,7 @@ export function NewSongModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-xs">
-      <div className="relative flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-[#E5E4DF] bg-white shadow-2xl">
+      <div role="dialog" aria-modal="true" aria-label="Generate new song" className="relative flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border border-[#E5E4DF] bg-white shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-[#ECEBE6] px-6 py-4">
           <div className="flex items-center gap-2">
@@ -313,6 +277,7 @@ export function NewSongModal({
                 <input
                   type="text"
                   dir="rtl"
+                  aria-label="Song title"
                   value={draftTitle}
                   onChange={(e) => setDraftTitle(e.target.value)}
                   className="font-arabic mt-1 w-full rounded-lg border border-[#D4D2CA] bg-white px-3 py-1.5 text-base font-semibold text-[#141413] focus:border-[#1B3B6F] focus:outline-none"
@@ -441,6 +406,7 @@ export function NewSongModal({
             </button>
           )}
         </div>
+        {activeOption && <p className="px-6 pb-3 text-xs text-emerald-700">New ✓ · {activeOption.closest_match_pct}% closest match before edits</p>}
       </div>
     </div>
   );
