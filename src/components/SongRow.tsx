@@ -50,6 +50,7 @@ interface SongRowProps {
     }
   ) => Promise<void>;
   onApproveLyric: (songId: string) => Promise<void>;
+  onCheckVocals: (songNumber: number, takeId: string) => void;
   onApproveTake: (songId: string, takeId: string) => Promise<void>;
   onChooseTake: (songId: string, takeId: string) => Promise<void>;
   onToggleArchive: (songId: string, archive: boolean) => Promise<void>;
@@ -81,6 +82,7 @@ export function SongRow({
   onChangeAdminFeeling,
   onSaveEdit,
   onApproveLyric,
+  onCheckVocals,
   onApproveTake,
   onChooseTake,
   onToggleArchive,
@@ -407,16 +409,16 @@ export function SongRow({
                             </span>
                             <span className="text-[#6E6C66]">{take.model}</span>
                             <span className="font-mono">
-                              {take.lufs?.toFixed(1)} LUFS
+                              {take.lufs?.toFixed(1) ?? "—"} LUFS
                             </span>
                             <span
                               className={`font-semibold ${
-                                (take.words_heard_pct ?? 0) >= 90
+                                take.words_heard_pct === null ? "text-[#6E6C66]" : take.words_heard_pct >= 90
                                   ? "text-[#15803D]"
                                   : "text-[#B91C1C]"
                               }`}
                             >
-                              {take.words_heard_pct ?? 0}% heard
+                              {take.words_heard_pct === null ? "Vocal score unavailable" : take.words_heard_pct + "% heard"}
                             </span>
                             {isBest && (
                               <span className="rounded bg-[#DCFCE7] px-2 py-0.5 text-[10px] font-bold text-[#15803D]">
@@ -427,8 +429,14 @@ export function SongRow({
 
                           <span className="text-[#6E6C66]">
                             {take.true_peak_db?.toFixed(1) ?? "—"} dBTP · Voice {take.voice_start ?? "—"}–{take.voice_end ?? "—"} s
-                            {take.is_approved ? " · Approved" : ""} {take.failure_reasons?.join(", ")}
+                            {take.is_approved ? " · Approved" : ""} {take.failure_reasons?.filter((reason) => reason !== "VOCAL_CHECK_PENDING" && reason !== take.failure_detail?.stage).join(", ")}
+                            {take.vocal_check_pending && " · Vocal check pending"}
                           </span>
+                          {take.failure_detail && (
+                            <p className="basis-full break-words text-[#B91C1C]">
+                              <span className="font-semibold">{take.failure_detail.stage}</span> · {take.failure_detail.message}
+                            </p>
+                          )}
                           <div className="flex flex-wrap items-center gap-2">
                             <button
                               type="button"
@@ -438,6 +446,14 @@ export function SongRow({
                             >
                               Play Take
                             </button>
+                            {take.vocal_check_pending && take.storage_path && !take.is_approved && (
+                              <button type="button" disabled={isBusy || isBatchRunning}
+                                onClick={() => onCheckVocals(song.number, take.id)}
+                                title="Runs Gemini vocal analysis using the studio budget"
+                                className="rounded border border-[#D4D2CA] px-2 py-0.5 text-[11px] disabled:opacity-50">
+                                Check vocals
+                              </button>
+                            )}
                             {take.status === "ready" && take.storage_path && !isBest && (
                               <button type="button"
                                 onClick={() => void onChooseTake(song.id, take.id).catch(() => undefined)}

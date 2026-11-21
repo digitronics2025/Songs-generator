@@ -10,11 +10,11 @@ Set these runtime variables on the Studio service. Keep the Gemini key in the se
 | `AUTH_CHECK_REVOKED` | Leave unset or set to `0` for signature, issuer, audience and expiry verification. Set to `1` to also look up revoked sessions and disabled accounts after granting Firebase Auth Viewer. |
 | `GEMINI_API_KEY` | The existing Gemini key for this app, stored as a runtime secret. |
 | `STUDIO_DAILY_BUDGET_USD` | The fallback daily cap in USD. Start at `0` if you want Studio disabled for paid calls while verifying setup. **Settings & Rules → Daily Gemini budget** overrides the fallback and resets at midnight UTC. |
-| `FFMPEG_PATH` | Optional path to an FFmpeg build containing `loudnorm` and `libmp3lame`. Leave unset to use the packaged binary or FFmpeg on `PATH`. |
+| `FFMPEG_PATH` | Optional absolute path to an FFmpeg build containing `loudnorm` and `libmp3lame`. Leave unset to use the platform-specific executable bundled by npm. |
 
 The budget is a conservative reservation ledger, separate from the Gemini invoice. The current reservations are $0.04 for Lyria Clip, $0.08 for Lyria 3.5, $0.06 for audio analysis, $0.045 for a lyric draft, and $0.002 per text embedding. Retries reserve their own amount. Start with a small cap and review actual charges in Google before raising it. [Gemini pricing](https://ai.google.dev/gemini-api/docs/pricing)
 
-Use Node 22.13 or later, `npm ci`, `npm run build`, and `npm start` with `NODE_ENV=production`. The server listens on Cloud Run's `PORT`. Use a request timeout of at least 480 seconds for generation and batch drafting. Use Application Default Credentials via the Cloud Run service identity.
+Use Node 22.18 or later, `npm ci --include=optional`, `npm run build`, and `npm start` with `NODE_ENV=production`. The server listens on Cloud Run's `PORT`. Use a request timeout of at least 480 seconds for generation and batch drafting. Use Application Default Credentials via the Cloud Run service identity.
 
 ## Restore Firebase access for the runtime identity
 
@@ -56,6 +56,14 @@ The Firebase project is `tenten-accounting-app`. An AI Studio deployment can run
 2. In that project open **Cloud Run → Services → Connect repo → Cloud Build → Set up with Cloud Build**. Select the Studio GitHub repository and the branch containing the reviewed release. Choose **Google Cloud Buildpacks** with the repo root as the build context, then click **Save**. Pick a service name and region and keep the previous service available during verification. Connecting the repository creates a trigger for subsequent pushes to the selected branch. [Cloud Run repository deployment](https://cloud.google.com/run/docs/quickstarts/deploy-continuously)
 3. Under the new service's **Container(s), Volumes, Networking, Security** settings, choose the dedicated **Service account** under **Security**. In **Container(s) → Variables & Secrets**, set the table values above and `NODE_ENV=production`. Reference the existing Gemini secret from Secret Manager, keep the timeout at least 480 seconds, and choose **Allow public access** if Studio should be reachable by browsers and digitronics.ma. Firebase owner auth and partner-key auth remain enforced by Express. Click **Create** when ready.
 4. In the Firebase console open **tenten-accounting-app → Authentication → Settings → Authorized domains → Add domain**. Add the new Cloud Run hostname. Check sign-in, the owner setup endpoint and the library on the new origin before changing the URL used by operators or digitronics.ma. [Firebase authorized domains](https://firebase.google.com/docs/auth/faq-and-troubleshooting#limit_authorized_domains)
+
+## Recover failed audio takes
+
+1. Build the Studio with npm optional dependencies included. The platform-specific FFmpeg executable is inside the installed npm package, and `npm run build` checks it by mastering a one-second synthetic MP3. The build and server use the same resolver and never select FFmpeg from the system PATH. [Bundled FFmpeg package](https://github.com/seydx/node-av#ffmpeg-binary-access)
+2. In the serving Cloud Run revision, check the `ffmpeg_startup` log for the binary path, version, `loudnorm` and `libmp3lame`. The log also reports the result of the synthetic mastering test. As an owner, check `GET /api/health/setup` for `ffmpeg_present`, `ffmpeg_version` and `ffmpeg_master_test`. If an override points to an older or missing executable, remove it to use the bundled one.
+3. In **Song Library**, press **Fix all failed**. When a failed take has its saved source MP3 for the current lyric, recovery uses it to write a new mastered WAV on the same take. This step makes no Gemini calls and preserves the original MP3. The recovered WAV is playable and shows **Vocal check pending**.
+4. To make a recovered take eligible for approval, open **View all takes** and press **Check vocals**. This separately runs Gemini vocal analysis under the studio budget. It does not request a new Lyria generation. Approve the take only after the checks pass.
+5. If the repair fails, open **View all takes** for the stage and short diagnostic. In Cloud Run, filter on `jsonPayload.event="generation_failed"` and the matching song or take ID to see the redacted details.
 
 ## Apply Firebase rules and indexes
 

@@ -1,5 +1,5 @@
 import type { AdminFeeling } from "../lib/lyricQuality.ts";
-import type { ProposedLyric, RepairLogEntry } from "../lib/songRepair.ts";
+import type { GenerationFailureDetail, ProposedLyric, RepairLogEntry } from "../lib/songRepair.ts";
 
 export type SongStatus =
   | "draft"
@@ -32,6 +32,8 @@ export interface SongTake {
   lyric_revision?: string;
   passed_all_checks?: boolean;
   failure_reasons?: string[];
+  failure_detail?: GenerationFailureDetail | null;
+  vocal_check_pending?: boolean;
   raw_storage_path?: string | null;
   transcribed_text?: string | null;
   repeated_words?: string[];

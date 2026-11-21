@@ -8,9 +8,11 @@ import { getBytes, ref, uploadBytes } from "firebase/storage";
 import { createApp } from "../server.ts";
 import { firebaseServices, type FirebaseServices } from "../server/config.ts";
 import { reserveBudget, hash } from "../server/limits.ts";
-import { migrateCatalog } from "../server/migration.ts";
+import { lyricRevision, migrateCatalog } from "../server/migration.ts";
 import { renderRules } from "../scripts/render-rules.ts";
 import { INITIAL_SONGS } from "../src/data/songs.ts";
+import { encodeMp3 } from "../server/audio.ts";
+import { tone } from "./audioFixture.ts";
 
 const projectId = "demo-darija-studio";
 const ownerEmail = "owner@example.test";
@@ -165,6 +167,73 @@ describe("real local Express, Auth and Firestore", () => {
     expect((await request("/songs/1/archive", "POST", { archived: true })).status).toBe(200);
     const actions = (await db.collection("song_history").where("song_id", "==", "1").get()).docs.map((doc) => doc.get("action"));
     expect(actions).toEqual(expect.arrayContaining(["migrated", "edited", "archived"]));
+  });
+
+  it("recovers a saved raw MP3 in place with no Gemini budget, then holds it for vocal review", async () => {
+    const db = services.db;
+    const songId = "raw-recovery-fixture";
+    const raw = "songs/takes/" + songId + "/take-4-source.mp3";
+    const song = { ...INITIAL_SONGS[0], id: songId, number: 911, status: "failed", archived: false };
+    const revision = lyricRevision(song.title, song.lines);
+    const songRef = db.doc("songs/" + songId);
+    await db.doc("settings/app_settings").set({ daily_budget_usd: 0 });
+    const mp3 = await encodeMp3(tone());
+    await services.bucket.file(raw).save(mp3, { resumable: false, contentType: "audio/mpeg" });
+    await songRef.set(song);
+    for (let index = 1; index <= 4; index++) {
+      await songRef.collection("takes").doc("take-" + index).set({
+        id: "take-" + index, take_number: index, lyric_revision: revision, model: "lyria-3-clip-preview",
+        status: "failed", cost_estimate: 0.04, storage_path: null,
+        ...(index === 4 ? { raw_storage_path: raw, failure_reasons: ["PROCESSING_ERROR"] } : {}),
+      });
+    }
+
+    const owner = await googleToken(ownerEmail);
+    const headers = { Authorization: "Bearer " + owner };
+    const response = await fetch(origin + "/api/songs/" + songId + "/repair", { method: "POST", headers });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "needs_person", take_id: "take-4" });
+    const take = (await songRef.collection("takes").doc("take-4").get()).data();
+    expect(take).toMatchObject({ raw_storage_path: raw, words_heard_pct: null, voice_start: null,
+      voice_end: null, duration_seconds: expect.any(Number), lufs: expect.any(Number), true_peak_db: expect.any(Number),
+      failure_reasons: ["VOCAL_CHECK_PENDING"], failure_detail: null, vocal_check_pending: true,
+      cost_estimate: 0.04, passed_all_checks: false });
+    expect(take?.storage_path).toMatch(/\.wav$/);
+    expect((await songRef.collection("takes").get()).size).toBe(4);
+    const [retained] = await services.bucket.file(raw).download();
+    expect(retained.equals(mp3)).toBe(true);
+    const [wav] = await services.bucket.file(take?.storage_path).download();
+    expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
+    const vocalCheck = await fetch(origin + "/api/songs/" + songId + "/takes/take-4/check-vocals", { method: "POST", headers });
+    expect(vocalCheck.status).toBe(503); // Gemini is disabled for the emulator.
+    expect((await songRef.collection("takes").doc("take-4").get()).data()).toEqual(take);
+  });
+
+  it("records just the processing status and stage when real mastering cannot decode the MP3", async () => {
+    const db = services.db;
+    const songId = "malformed-audio-fixture";
+    const raw = "songs/takes/" + songId + "/take-1-source.mp3";
+    const song = { ...INITIAL_SONGS[0], id: songId, number: 912, status: "failed", archived: false };
+    const songRef = db.doc("songs/" + songId);
+    await services.bucket.file(raw).save(Buffer.from("invalid MP3 fixture"),
+      { resumable: false, contentType: "audio/mpeg" });
+    await songRef.set(song);
+    const takeRef = songRef.collection("takes").doc("take-1");
+    await takeRef.set({
+      id: "take-1", take_number: 1, lyric_revision: lyricRevision(song.title, song.lines),
+      model: "lyria-3-clip-preview", status: "failed", storage_path: null, raw_storage_path: raw,
+    });
+    const owner = await googleToken(ownerEmail);
+    const response = await fetch(origin + "/api/songs/" + songId + "/repair", {
+      method: "POST", headers: { Authorization: "Bearer " + owner },
+    });
+    expect(response.status).toBe(502);
+    expect((await takeRef.get()).data()).toMatchObject({
+      storage_path: null, raw_storage_path: raw, lufs: null, duration_seconds: null, words_heard_pct: null,
+      failure_reasons: ["PROCESSING_ERROR", "master_pass1"],
+      failure_detail: { stage: "master_pass1", message: expect.any(String) },
+    });
+    expect((await db.doc("studio_locks/" + songId).get()).get("expires_at")).toBe(0);
   });
 
   it("paginates tied timestamps, checks scopes, persists an ack and rejects revocation", async () => {

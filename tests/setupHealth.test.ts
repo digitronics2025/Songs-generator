@@ -1,4 +1,6 @@
 import { once } from "node:events";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import type { Server } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../server.ts";
@@ -140,12 +142,26 @@ describe("owner verification and setup health", () => {
     expect(await response.json()).toEqual({
       ok: true, token_verified: true, firestore: true, storage_read: true,
       storage_list: true, signed_url: true, owner_count: 1, gemini_key_present: true,
+      ffmpeg_present: true, ffmpeg_version: expect.any(String), loudnorm: true, libmp3lame: true, ffmpeg_master_test: true,
     });
     expect(app.db.doc).toHaveBeenCalledWith("settings/app_settings");
     expect(app.db.runTransaction).not.toHaveBeenCalled();
     expect(app.bucket.file.mock.calls).toEqual([["songs/_studio_setup_probe.wav"], ["songs/_studio_setup_probe.wav"]]);
     expect(app.bucket.getFiles).toHaveBeenCalledWith({ prefix: "songs/", maxResults: 1, autoPaginate: false });
     expect(app.bucket.getSignedUrl).toHaveBeenCalledWith({ version: "v4", action: "read", expires: expect.any(Number) });
+  });
+
+  it("rejects a missing FFmpeg executable without falling back to PATH", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "local-test-configured-value");
+    vi.stubEnv("FFMPEG_PATH", join(tmpdir(), "studio-missing-ffmpeg-test", "ffmpeg"));
+    const app = dependencies();
+    const url = await launch(app);
+    const response = await fetch(url + "/api/health/setup", { headers: header });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      ok: false, firestore: true, ffmpeg_present: false, ffmpeg_version: null,
+      loudnorm: false, libmp3lame: false, ffmpeg_master_test: false,
+    });
   });
 
   it("reports IAM failures independently and keeps the owner diagnostics available when Firestore fails", async () => {
@@ -164,6 +180,7 @@ describe("owner verification and setup health", () => {
     expect(await response.json()).toEqual({
       ok: false, token_verified: true, firestore: false, storage_read: true,
       storage_list: false, signed_url: false, owner_count: 1, gemini_key_present: false,
+      ffmpeg_present: true, ffmpeg_version: expect.any(String), loudnorm: true, libmp3lame: true, ffmpeg_master_test: true,
     });
     expect(log.mock.calls).toHaveLength(3);
     expect(JSON.stringify(log.mock.calls)).not.toContain(signedFixture);
