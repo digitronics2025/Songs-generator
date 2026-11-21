@@ -5,15 +5,15 @@ export const DATA_CONFIGURATION = "Server cannot access Firebase data (configura
 
 function errorDetails(error: unknown) {
   if (typeof error !== "object" || error === null) return {};
-  return error as { code?: unknown; message?: unknown; response?: { status?: unknown }; name?: string };
+  return error as { code?: unknown; status?: unknown; message?: unknown; response?: { status?: unknown }; name?: string };
 }
 
 export function firebaseErrorCode(error: unknown) {
-  const { code, response } = errorDetails(error);
+  const { code, response, status } = errorDetails(error);
   const value = (typeof code === "number" || typeof code === "string") ? String(code) : "";
   if (/^(?:[0-9]{1,3}|[A-Z][A-Z0-9_]{1,48}|[a-z-]{2,24}\/[a-z-]{2,48}|permission-denied|unauthenticated|insufficient-permission)$/.test(value)) return value;
-  const status = response?.status;
-  return typeof status === "number" ? String(status) : "unknown";
+  const httpStatus = response?.status ?? status;
+  return typeof httpStatus === "number" ? String(httpStatus) : "unknown";
 }
 
 export function authFailure(error: unknown) {
@@ -54,16 +54,14 @@ export function firebaseDataUnavailable(error: unknown) {
     /PERMISSION_DENIED|UNAUTHENTICATED|Could not load the default credentials|Unable to detect a Project Id|database .+ does not exist/i.test(message);
 }
 
-export function logFirebaseFailure(operation: string, error: unknown, authorization?: string) {
-  const details = errorDetails(error);
-  let message = typeof details.message === "string" ? details.message : "Firebase request failed.";
+export function diagnosticMessage(message: string, authorization?: string) {
   const submittedToken = authorization?.match(/^\s*Bearer\s+(\S+)/i)?.[1];
   for (const secret of [authorization, submittedToken, process.env.GEMINI_API_KEY]) {
     if (secret) message = message.replaceAll(secret, "[redacted]");
   }
-  message = message
+  return message
     .replace(/-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g, "[redacted]")
-    .replace(/https?:\/\/\S+/gi, "[url]")
+    .replace(/(?:https?|gs):\/\/\S+/gi, "[url]")
     .replace(/\b(?:Bearer|Basic)\s+\S+/gi, "[redacted]")
     .replace(/\b[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]+\b/g, "[redacted]")
     .replace(/\b(?:AIza[\w-]{20,}|dss_[\w-]{43}|ya29\.[\w-]+)\b/g, "[redacted]")
@@ -71,5 +69,10 @@ export function logFirebaseFailure(operation: string, error: unknown, authorizat
     .replace(/[\w.+-]+@[\w.-]+\.[a-z]{2,}/gi, "[email]")
     .replace(/\s+/g, " ")
     .slice(0, 500);
+}
+
+export function logFirebaseFailure(operation: string, error: unknown, authorization?: string) {
+  const details = errorDetails(error);
+  const message = diagnosticMessage(typeof details.message === "string" ? details.message : "Firebase request failed.", authorization);
   console.warn(JSON.stringify({ event: "studio_firebase_failure", operation, code: firebaseErrorCode(error), message }));
 }

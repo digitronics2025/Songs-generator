@@ -1,6 +1,7 @@
 import type { RequestHandler } from "express";
 import type { OwnerAuthenticator } from "./auth.ts";
 import type { FirebaseServices } from "./config.ts";
+import { audioHealth } from "./audioHealth.ts";
 import { HttpError } from "./errors.ts";
 import { firebaseErrorCode, logFirebaseFailure } from "./firebaseErrors.ts";
 
@@ -50,7 +51,7 @@ export function setupHealth(
     }
     // The regular owner rate limiter uses Firestore. Run these read-only checks
     // independently so setup can still explain a Firestore permission failure.
-    const [firestore, storage_read, storage_list, signed_url] = await Promise.all([
+    const [firestore, storage_read, storage_list, signed_url, audio] = await Promise.all([
       check("setup_firestore", () => db.doc("settings/app_settings").get(), authorization),
       check("setup_storage_read", async () => {
         try {
@@ -69,14 +70,15 @@ export function setupHealth(
         });
         if (!url) throw new Error("Cloud Storage returned no signed URL.");
       }, authorization),
+      audioHealth(),
     ]);
     const gemini_key_present = Boolean(process.env.GEMINI_API_KEY?.trim());
     // The application reads known object paths. Bucket-wide list permission
     // is unnecessary when the operator grants access via a prefix condition.
-    const ok = firestore && storage_read && signed_url && ownerCount > 0 && gemini_key_present;
+    const ok = firestore && storage_read && signed_url && ownerCount > 0 && gemini_key_present && audio.ffmpeg_master_test;
     res.status(ok ? 200 : 503).json({
       ok, token_verified: true, firestore, storage_read, storage_list, signed_url,
-      owner_count: ownerCount, gemini_key_present,
+      owner_count: ownerCount, gemini_key_present, ...audio,
     });
   };
 }

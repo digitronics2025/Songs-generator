@@ -81,7 +81,7 @@ export class Gemini {
         const status = providerStatus(error);
         if (attempt >= 1 || !retryable(error)) {
           throw new HttpError(status === 429 ? 429 : status === 504 ? 504 : 502,
-            status === 404 ? "The configured Gemini model is unavailable." : "Gemini could not complete the request.");
+            status === 404 ? "The configured Gemini model is unavailable." : "Gemini could not complete the request.", { cause: error });
         }
         this.onRetry?.(status);
         await delay(900 + Math.random() * 500);

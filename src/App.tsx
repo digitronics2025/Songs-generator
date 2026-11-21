@@ -763,6 +763,7 @@ export default function App() {
                     onChangeAdminFeeling={handleChangeAdminFeeling}
                     onSaveEdit={handleSaveEdit}
                     onApproveLyric={handleApproveLyric}
+                    onCheckVocals={(number, take) => { void handleGenerateSong(number, false, take); }}
                     onApproveTake={handleApproveTake}
                     onChooseTake={handleChooseTake}
                     onToggleArchive={handleToggleArchive}

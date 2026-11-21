@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { ZodError } from "zod";
 import { parseOwnerEmails } from "./src/lib/ownerEmails.ts";
 import { firebaseServices, type FirebaseServices } from "./server/config.ts";
+import { logFfmpegStartup } from "./server/audioHealth.ts";
 import { createOwnerAuthenticator } from "./server/auth.ts";
 import { HttpError } from "./server/errors.ts";
 import { DATA_CONFIGURATION, firebaseDataUnavailable, logFirebaseFailure } from "./server/firebaseErrors.ts";
@@ -62,6 +63,7 @@ async function start() {
   app.listen(port, "0.0.0.0", () => {
     console.info("Darija Song Studio listening on port " + port);
     void logRuntimeServiceAccount();
+    void logFfmpegStartup();
   });
 }
 

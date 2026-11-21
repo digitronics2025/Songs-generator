@@ -245,6 +245,26 @@
           "items": {
             "type": "string"
           }
+        },
+        "failure_detail": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The stage and redacted diagnostic for the latest processing or quality failure.",
+          "properties": {
+            "stage": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 180
+            }
+          }
+        },
+        "vocal_check_pending": {
+          "type": "boolean",
+          "description": "A mastered WAV is available but its vocals still need analysis before approval."
         }
       },
       "required": [

@@ -141,9 +141,16 @@ export function ownerRouter(services: FirebaseServices, authenticate: OwnerAuthe
       emptyBody(req);
       const { id: songId } = ids.parse(req.params);
       await rateLimit(db, "paid", res.locals.uid, 8);
-      res.json(await generateTake(services, songId, res.locals.uid, mode === "repair"));
+      res.json(await generateTake(services, songId, res.locals.uid, mode));
     });
   }
+  api.post("/songs/:id/takes/:take/check-vocals", async (req, res) => {
+    emptyQuery(req);
+    emptyBody(req);
+    const params = z.object({ id, take: id }).strict().parse(req.params);
+    await rateLimit(db, "paid", res.locals.uid, 8);
+    res.json(await generateTake(services, params.id, res.locals.uid, { checkVocals: params.take }));
+  });
   api.get("/songs/:id/job", async (req, res) => {
     emptyQuery(req);
     emptyBody(req);

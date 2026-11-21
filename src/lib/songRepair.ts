@@ -1,5 +1,13 @@
 import { normalizeArabicText, validateLyrics } from "./lyricQuality.ts";
 
+export type GenerationStage = "lyria" | "raw_upload" | "raw_download" | "master_pass1" | "master_pass2" |
+  "master_measure" | "wav_upload" | "wav_download" | "transcribe" | "lyric_repair" | "claim" | "finalize";
+
+export interface GenerationFailureDetail {
+  stage: GenerationStage;
+  message: string;
+}
+
 export interface RepairLogEntry {
   id: string;
   timestamp: string;
@@ -57,25 +65,31 @@ export function canRetryProvider(status: number) {
 export type RepairAction =
   | { type: "NONE"; reason: string }
   | { type: "REQUEST_LYRIC_FIX"; reason: string }
-  | { type: "REMASTER"; reason: string }
+  | { type: "REMASTER"; reason: string; source: "raw" | "wav"; takeIndex: number }
+  | { type: "AWAIT_VOCALS"; reason: string }
   | { type: "NEW_TAKE"; reason: string; tempo: number; directive: string };
 
 export function decideRepairAction(
   song: { lines: string[]; tempo_bpm: number },
-  takes: Array<AudioMetrics & { storage_path?: string | null; status?: string }>,
+  takes: Array<AudioMetrics & { storage_path?: string | null; raw_storage_path?: string | null;
+    status?: string; is_approved?: boolean; vocal_check_pending?: boolean }>,
   settings?: Parameters<typeof validateLyrics>[1],
 ): RepairAction {
-  const lyric = validateLyrics(song.lines, settings);
-  if (!lyric.valid) return { type: "REQUEST_LYRIC_FIX", reason: lyric.errors.join(" ") };
+  const raw = takes.reduce((found, take, index) => take.status === "failed" && !take.is_approved &&
+    take.raw_storage_path && !take.storage_path ? index : found, -1);
+  if (raw !== -1) return { type: "REMASTER", source: "raw", takeIndex: raw, reason: "Master saved source audio." };
   const recent = takes.filter((take) => Boolean(take.storage_path?.endsWith(".wav")));
   const last = recent.at(-1);
+  if (last?.vocal_check_pending) return { type: "AWAIT_VOCALS", reason: "Mastered audio is waiting for a vocal check." };
+  const lyric = validateLyrics(song.lines, settings);
+  if (!lyric.valid) return { type: "REQUEST_LYRIC_FIX", reason: lyric.errors.join(" ") };
   const failures = last ? audioFailures(last) : ["NO_MEASURED_AUDIO"];
   if (last && !failures.length && last.status !== "failed") return { type: "NONE", reason: "The last take passed." };
   const persistent = checkPersistentMissingWord(recent);
   if (persistent) return { type: "REQUEST_LYRIC_FIX", reason: "Repeatedly missing word: " + persistent };
   const reason = failures.join(", ");
-  if (last && failures.length && failures.every((code) => ["LOUDNESS_FAILURE", "PEAK_FAILURE"].includes(code))) {
-    return { type: "REMASTER", reason };
+  if (last && !last.is_approved && failures.length && failures.every((code) => ["LOUDNESS_FAILURE", "PEAK_FAILURE"].includes(code))) {
+    return { type: "REMASTER", source: "wav", takeIndex: takes.indexOf(last), reason };
   }
   return {
     type: "NEW_TAKE", reason, tempo: Math.max(70, song.tempo_bpm - 8),

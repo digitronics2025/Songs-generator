@@ -16,13 +16,14 @@ export function useSongActions(songs: SongState[], refresh: () => Promise<void>,
       throw error;
     }
   }
-  async function generate(songNumber: number, repair = false) {
+  async function generate(songNumber: number, repair = false, checkTakeId?: string) {
     const song = songs.find((item) => item.number === songNumber);
     if (!song) return { stopBatch: false };
     setGeneratingNumbers((previous) => new Set([...previous, songNumber]));
     try {
-      const outcome = await studioApi<{ status: string }>(songPath(song.id) + (repair ? "/repair" : "/generate"), "POST");
-      if (outcome.status === "failed" && !repair) {
+      const endpoint = checkTakeId ? "/takes/" + encodeURIComponent(checkTakeId) + "/check-vocals" : repair ? "/repair" : "/generate";
+      const outcome = await studioApi<{ status: string }>(songPath(song.id) + endpoint, "POST");
+      if (outcome.status === "failed" && !repair && !checkTakeId) {
         const repaired = await studioApi<{ status: string }>(songPath(song.id) + "/repair", "POST");
         if (repaired.status !== "failed") return { stopBatch: false };
       }
