@@ -3,6 +3,8 @@ import type { OwnerAuthenticator } from "./auth.ts";
 import type { FirebaseServices } from "./config.ts";
 import { audioHealth } from "./audioHealth.ts";
 import { HttpError } from "./errors.ts";
+import type { GeminiModelCheck } from "./gemini.ts";
+import { readSettings } from "./settings.ts";
 import { firebaseErrorCode, logFirebaseFailure } from "./firebaseErrors.ts";
 
 // Reserved, read-only probe target. A 404 verifies permission to look up the
@@ -30,7 +32,7 @@ async function check(operation: string, action: () => Promise<unknown>, authoriz
 }
 
 export function setupHealth(
-  { db, bucket }: FirebaseServices, authenticate: OwnerAuthenticator, ownerCount: number,
+  { db, bucket }: FirebaseServices, authenticate: OwnerAuthenticator, ownerCount: number, checkModel: GeminiModelCheck,
 ): RequestHandler {
   return async (req, res) => {
     res.set("Cache-Control", "no-store").vary("Authorization");
@@ -51,8 +53,10 @@ export function setupHealth(
     }
     // The regular owner rate limiter uses Firestore. Run these read-only checks
     // independently so setup can still explain a Firestore permission failure.
-    const [firestore, storage_read, storage_list, signed_url, audio] = await Promise.all([
-      check("setup_firestore", () => db.doc("settings/app_settings").get(), authorization),
+    let textModel: string | null = null;
+    const settings = check("setup_firestore", async () => { textModel = (await readSettings(db)).text_model; }, authorization);
+    const [firestore, storage_read, storage_list, signed_url, audio, gemini_text_model_available] = await Promise.all([
+      settings,
       check("setup_storage_read", async () => {
         try {
           await bucket.file(probePath).getMetadata();
@@ -71,14 +75,15 @@ export function setupHealth(
         if (!url) throw new Error("Cloud Storage returned no signed URL.");
       }, authorization),
       audioHealth(),
+      settings.then((read) => checkModel(read ? textModel : null)),
     ]);
     const gemini_key_present = Boolean(process.env.GEMINI_API_KEY?.trim());
     // The application reads known object paths. Bucket-wide list permission
     // is unnecessary when the operator grants access via a prefix condition.
-    const ok = firestore && storage_read && signed_url && ownerCount > 0 && gemini_key_present && audio.ffmpeg_master_test;
+    const ok = firestore && storage_read && signed_url && ownerCount > 0 && gemini_key_present && gemini_text_model_available && audio.ffmpeg_master_test;
     res.status(ok ? 200 : 503).json({
       ok, token_verified: true, firestore, storage_read, storage_list, signed_url,
-      owner_count: ownerCount, gemini_key_present, ...audio,
+      owner_count: ownerCount, gemini_key_present, gemini_text_model: firestore ? textModel : null, gemini_text_model_available, ...audio,
     });
   };
 }

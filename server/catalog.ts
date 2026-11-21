@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import type { DocumentData, Firestore, QueryDocumentSnapshot } from "firebase-admin/firestore";
+import type { DocumentData, Firestore, QueryDocumentSnapshot, Transaction } from "firebase-admin/firestore";
 import { formatSongFilename, INITIAL_SONGS, type StudioSettings } from "../src/data/songs.ts";
 import { closestLyric, type LyricText } from "../src/lib/duplicates.ts";
 import { validateLyrics } from "../src/lib/lyricQuality.ts";
+import { autopilotTakeQualifies } from "./autopilotQuality.ts";
 import { HttpError } from "./errors.ts";
 import { Gemini } from "./gemini.ts";
-import { hash } from "./limits.ts";
+import { checkAutopilotAllowance, hash, type AutopilotBudget } from "./limits.ts";
 import { historyRecord, legacyTakes, lyricRevision } from "./migration.ts";
 import { batchLimit, type Draft, type SaveDraft, type importHistory } from "./schemas.ts";
 import type { z } from "zod";
@@ -94,9 +95,9 @@ export function assertLyrics(draft: { lines: string[] }, settings: StudioSetting
 }
 
 export async function proposeDrafts(
-  db: Firestore, settings: StudioSettings, feelings: string[], count: number, idea: string,
+  db: Firestore, settings: StudioSettings, feelings: string[], count: number, idea: string, budget?: AutopilotBudget,
 ) {
-  const gemini = new Gemini(db);
+  const gemini = new Gemini(db, undefined, undefined, budget);
   const history = await historyText(db);
   const drafts: Array<Draft & { closest_match_pct: number; validation: { valid: boolean; errors: string[] } }> = [];
   const failures: string[] = [];
@@ -146,12 +147,22 @@ export async function proposeDrafts(
     tempo_bpm, instruments, vocal_tone, closest_match_pct, validation })), failures };
 }
 
-export async function createSongs(db: Firestore, settings: StudioSettings, uid: string, drafts: SaveDraft[]) {
+export async function checkRepairLyric(db: Firestore, draft: Draft, budget: AutopilotBudget) {
+  const version = versionOf((await db.doc(revisionPath).get()).data());
+  const history = await historyText(db);
+  if (closestLyric(draft, history).rejected) throw new HttpError(409, "The repaired lyric matches song history.");
+  await addEmbeddings(db, new Gemini(db, undefined, undefined, budget), [...history, draft]);
+  if (closestLyric(draft, history).rejected) throw new HttpError(409, "The repaired lyric matches song history.");
+  return version;
+}
+
+export async function createSongs(db: Firestore, settings: StudioSettings, uid: string, drafts: SaveDraft[],
+  budget?: AutopilotBudget, replacementFor?: string) {
   for (const draft of drafts) assertLyrics(draft, settings);
   const rev = db.doc(revisionPath);
   const initial = await rev.get();
   const history = await historyText(db);
-  await addEmbeddings(db, new Gemini(db), [...history, ...drafts]);
+  await addEmbeddings(db, new Gemini(db, undefined, undefined, budget), [...history, ...drafts]);
   const now = new Date().toISOString();
   const matches = drafts.map((draft, index) => {
     const match = closestLyric(draft, [...history, ...drafts.slice(0, index)]);
@@ -164,6 +175,22 @@ export async function createSongs(db: Firestore, settings: StudioSettings, uid: 
       throw new HttpError(409, "Song history changed. Save again to recheck for duplicates.");
     }
     const latest = await tx.get(db.collection("songs").orderBy("number", "desc").limit(1));
+    const runRef = budget ? db.doc(budget.path) : null;
+    const oldSongRef = replacementFor ? db.doc("songs/" + replacementFor) : null;
+    if (runRef && budget) {
+      const [run, currentSettings] = await tx.getAll(runRef, db.doc("settings/app_settings"));
+      checkAutopilotAllowance(run, currentSettings, budget, 0);
+      const cap = Math.min(run.get("max_new_songs"), currentSettings.get("autopilot.max_new_songs"));
+      if (run.get("drafted") + drafts.length > cap) throw new HttpError(409, "The Autopilot daily new-song limit has been reached.");
+      if (oldSongRef) {
+        const oldSong = await tx.get(oldSongRef);
+        if (drafts.length !== 1 || oldSong.get("status") !== "archived" || !oldSong.get("autopilot_replacement_pending") ||
+            oldSong.get("admin_feeling") !== drafts[0].admin_feeling) {
+          throw new HttpError(409, "This archived lyric no longer needs a replacement.");
+        }
+      }
+      tx.update(runRef, { drafted: run.get("drafted") + drafts.length });
+    }
     const first = Math.max(latest.docs[0]?.get("number") ?? 0, INITIAL_SONGS.length) + 1;
     const ids: string[] = [];
     for (const [index, draft] of drafts.entries()) {
@@ -180,29 +207,38 @@ export async function createSongs(db: Firestore, settings: StudioSettings, uid: 
       tx.create(db.doc("songs/" + id), song);
       tx.create(db.doc(historyCollection + "/" + historyId), historyRecord(historyId, id, song, "created", now));
     }
+    if (oldSongRef) tx.update(oldSongRef, { autopilot_replacement_pending: false, autopilot_replacement_id: ids[0] });
     tx.set(rev, { version: versionOf(current.data()) + 1 }, { merge: true });
     return ids;
   });
 }
 
+type SongMutation = { patch: DocumentData; action?: string } | null;
+
 export async function mutateSong(
-  db: Firestore, id: string, fn: (song: DocumentData) => { patch: DocumentData; action?: string },
+  db: Firestore, id: string, fn: (song: DocumentData, tx: Transaction) => SongMutation | Promise<SongMutation>,
 ) {
   const ref = db.doc("songs/" + id);
   const rev = db.doc(revisionPath);
   const now = new Date().toISOString();
   const historyId = randomUUID();
-  await db.runTransaction(async (tx) => {
+  return db.runTransaction(async (tx) => {
     const [current, revision, lease] = await tx.getAll(ref, rev, db.doc("studio_locks/" + id));
     const song = current.data();
     if (!song) throw new HttpError(404, "Song not found.");
     if ((lease.get("expires_at") ?? 0) > Date.now()) throw new HttpError(409, "This song is generating.");
-    const { action, patch } = fn(song);
+    const result = await fn(song, tx);
+    if (!result) return false;
+    const { action, patch } = result;
     tx.update(ref, { ...patch, updated_at: now });
     if (action) {
-      tx.create(db.doc(historyCollection + "/" + historyId), historyRecord(historyId, id, { ...song, ...patch }, action, now));
+      tx.create(db.doc(historyCollection + "/" + historyId), {
+        ...historyRecord(historyId, id, { ...song, ...patch }, action, now),
+        ...(action === "archived" && typeof patch.archive_reason === "string" ? { archive_reason: patch.archive_reason } : {}),
+      });
       tx.set(rev, { version: versionOf(revision.data()) + 1 }, { merge: true });
     }
+    return true;
   });
 }
 
@@ -220,27 +256,36 @@ export function takeProjection(take: DocumentData) {
   };
 }
 
-export async function selectTake(db: Firestore, id: string, takeId: string, approve: boolean) {
+export async function selectTake(db: Firestore, id: string, takeId: string, approve: boolean, budget?: AutopilotBudget) {
   const ref = db.doc("songs/" + id);
   const take = ref.collection("takes").doc(takeId);
-  await db.runTransaction(async (tx) => {
+  return db.runTransaction(async (tx) => {
     const [song, target, lease] = await tx.getAll(ref, take, db.doc("studio_locks/" + id));
+    if (budget) {
+      if (song.get("status") === "approved") return false;
+      const [run, settings] = await tx.getAll(db.doc(budget.path), db.doc("settings/app_settings"));
+      checkAutopilotAllowance(run, settings, budget, 0);
+    }
     if (song.get("archived")) throw new HttpError(409, "Restore this song before selecting a take.");
     if ((lease.get("expires_at") ?? 0) > Date.now()) throw new HttpError(409, "This song is generating.");
     if (!song.exists || !target.exists) throw new HttpError(404, "Song or take not found.");
     const data = target.data()!;
     if (data.status !== "ready" || !data.storage_path ||
         data.lyric_revision !== lyricRevision(song.get("title"), song.get("lines")) ||
-        (approve && !data.passed_all_checks)) {
+        (approve && !data.passed_all_checks) || (budget && !autopilotTakeQualifies(data))) {
       throw new HttpError(409, "Approval requires a take for the current lyric that passed every quality check.");
     }
-    if (approve && !data.is_approved) tx.update(take, { is_approved: true, approved_at: new Date().toISOString() });
+    if (approve && !data.is_approved) tx.update(take, {
+      is_approved: true, approved_at: new Date().toISOString(), ...(budget ? { auto_approved: true } : {}),
+    });
     const approved = approve || data.is_approved === true;
     tx.update(ref, {
       ...takeProjection(data), status: approved ? "approved" : "ready",
+      auto_approved: approved && Boolean(budget || data.auto_approved),
       approved_take_id: approve ? takeId : song.get("approved_take_id") ?? null,
       updated_at: new Date().toISOString(),
     });
+    return true;
   });
 }
 

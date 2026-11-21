@@ -52,8 +52,8 @@ function dependencies() {
   };
 }
 
-async function launch(services: ReturnType<typeof dependencies>) {
-  server = createApp(services as unknown as FirebaseServices, [owner]).listen(0, "127.0.0.1");
+async function launch(services: ReturnType<typeof dependencies>, checkModel = vi.fn(async (model: string | null) => Boolean(model))) {
+  server = createApp(services as unknown as FirebaseServices, [owner], checkModel).listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("Local studio test server unavailable.");
@@ -152,6 +152,7 @@ describe("owner verification and setup health", () => {
     expect(await response.json()).toEqual({
       ok: true, token_verified: true, firestore: true, storage_read: true,
       storage_list: true, signed_url: true, owner_count: 1, gemini_key_present: true,
+      gemini_text_model: "gemini-4-hydrogen", gemini_text_model_available: true,
       ...bundledHealth,
     });
     expect(app.db.doc).toHaveBeenCalledWith("settings/app_settings");
@@ -205,6 +206,20 @@ describe("owner verification and setup health", () => {
     expect(command).toHaveBeenCalledWith(process.execPath, ["-version"], expect.objectContaining({ timeoutMs: 30_000 }));
   });
 
+  it("reports the configured Gemini model when metadata verification fails", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "local-test-configured-value");
+    const app = dependencies();
+    app.db.docGet.mockResolvedValue({ data: () => ({ text_model: "gemini-unavailable" }) });
+    const checkModel = vi.fn(async (_model: string | null) => false);
+    const url = await launch(app, checkModel);
+    const response = await fetch(url + "/api/health/setup", { headers: header });
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({
+      ok: false, gemini_text_model: "gemini-unavailable", gemini_text_model_available: false,
+    });
+    expect(checkModel).toHaveBeenCalledWith("gemini-unavailable");
+  });
+
   it("reports IAM failures independently and keeps the owner diagnostics available when Firestore fails", async () => {
     vi.stubEnv("GEMINI_API_KEY", "");
     const log = vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -221,6 +236,7 @@ describe("owner verification and setup health", () => {
     expect(await response.json()).toEqual({
       ok: false, token_verified: true, firestore: false, storage_read: true,
       storage_list: false, signed_url: false, owner_count: 1, gemini_key_present: false,
+      gemini_text_model: null, gemini_text_model_available: false,
       ...bundledHealth,
     });
     expect(log.mock.calls).toHaveLength(3);

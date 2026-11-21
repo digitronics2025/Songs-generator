@@ -241,7 +241,7 @@ export function SongRow({
                 ) : song.status === "approved" ? (
                   <span className="inline-flex items-center gap-1 rounded-md bg-[#DCFCE7] px-2.5 py-0.5 font-semibold text-[#15803D]">
                     <CheckCircle2 className="h-3.5 w-3.5" />
-                    Approved
+                    {song.auto_approved ? "Auto-approved" : "Approved"}
                     {song.best_take_id ? ` · ${song.best_take_id}` : ""}
                   </span>
                 ) : song.status === "ready" ? (
@@ -429,7 +429,7 @@ export function SongRow({
 
                           <span className="text-[#6E6C66]">
                             {take.true_peak_db?.toFixed(1) ?? "—"} dBTP · Voice {take.voice_start ?? "—"}–{take.voice_end ?? "—"} s
-                            {take.is_approved ? " · Approved" : ""} {take.failure_reasons?.filter((reason) => reason !== "VOCAL_CHECK_PENDING" && reason !== take.failure_detail?.stage).join(", ")}
+                            {take.auto_approved ? " · Auto-approved" : take.is_approved ? " · Approved" : ""} {take.failure_reasons?.filter((reason) => reason !== "VOCAL_CHECK_PENDING" && reason !== take.failure_detail?.stage).join(", ")}
                             {take.vocal_check_pending && " · Vocal check pending"}
                           </span>
                           {take.failure_detail && (

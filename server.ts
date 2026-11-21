@@ -6,14 +6,17 @@ import { ZodError } from "zod";
 import { parseOwnerEmails } from "./src/lib/ownerEmails.ts";
 import { firebaseServices, type FirebaseServices } from "./server/config.ts";
 import { logFfmpegStartup } from "./server/audioHealth.ts";
+import { autopilotRouter } from "./server/autopilotRoutes.ts";
 import { createOwnerAuthenticator } from "./server/auth.ts";
 import { HttpError } from "./server/errors.ts";
+import { createGeminiModelCheck } from "./server/gemini.ts";
+import { readSettings } from "./server/settings.ts";
 import { DATA_CONFIGURATION, firebaseDataUnavailable, logFirebaseFailure } from "./server/firebaseErrors.ts";
 import { ownerRouter } from "./server/owner.ts";
 import { partnerRouter } from "./server/partner.ts";
 import { logRuntimeServiceAccount, setupHealth } from "./server/setupHealth.ts";
 
-export function createApp(services: FirebaseServices, emails: string[]) {
+export function createApp(services: FirebaseServices, emails: string[], checkModel = createGeminiModelCheck()) {
   const app = express();
   app.disable("x-powered-by");
   app.use((_req, res, next) => {
@@ -22,8 +25,9 @@ export function createApp(services: FirebaseServices, emails: string[]) {
     next();
   });
   const authenticate = createOwnerAuthenticator(services.auth, emails);
-  app.get("/api/health/setup", setupHealth(services, authenticate, emails.length));
+  app.get("/api/health/setup", setupHealth(services, authenticate, emails.length, checkModel));
   app.use("/api/v1", partnerRouter(services));
+  app.use("/api/autopilot", autopilotRouter(services, authenticate));
   app.use("/api", ownerRouter(services, authenticate));
   const errors: ErrorRequestHandler = (error, req, res, next) => {
     if (res.headersSent) return next(error);
@@ -49,7 +53,9 @@ export function createApp(services: FirebaseServices, emails: string[]) {
 }
 
 async function start() {
-  const app = createApp(firebaseServices(), parseOwnerEmails(process.env.OWNER_EMAILS));
+  const services = firebaseServices();
+  const checkModel = createGeminiModelCheck();
+  const app = createApp(services, parseOwnerEmails(process.env.OWNER_EMAILS), checkModel);
   if (process.env.NODE_ENV !== "production") {
     const { createServer } = await import("vite");
     const vite = await createServer({ server: { middlewareMode: true }, appType: "spa" });
@@ -64,6 +70,9 @@ async function start() {
     console.info("Darija Song Studio listening on port " + port);
     void logRuntimeServiceAccount();
     void logFfmpegStartup();
+    void readSettings(services.db).then(async ({ text_model }) => {
+      console.info(JSON.stringify({ event: "gemini_startup", model: text_model, available: await checkModel(text_model) }));
+    }).catch((error: unknown) => logFirebaseFailure("gemini_startup_settings", error));
   });
 }
 
