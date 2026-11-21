@@ -1,3 +1,5 @@
+import type { AdminFeeling } from "../lib/lyricQuality.ts";
+
 export type SongStatus = "pending" | "generating" | "ready" | "error";
 
 export interface SongSpec {
@@ -5,7 +7,7 @@ export interface SongSpec {
   feeling_key: string;
   title: string;
   theme: string;
-  lines: [string, string, string, string];
+  lines: string[];
   mood: string;
   tempo_bpm: number;
   instruments: string;
@@ -13,26 +15,42 @@ export interface SongSpec {
 }
 
 export interface SongState extends SongSpec {
+  admin_feeling: AdminFeeling;
+  model_used: string | null;
   status: SongStatus;
   duration_seconds: number | null;
-  audio_url: string | null;
-  file_name: string;
-  format: "wav" | "mp3";
   lufs: number | null;
   true_peak_db: number | null;
-  error_message: string | null;
+  file_name: string;
+  storage_path: string | null;
+  download_url: string | null;
   generated_at: string | null;
+  error_message: string | null;
+  words_heard_pct: number | null;
+  transcribed_text: string | null;
+  missing_words: string[];
+  extra_words: string[];
+  voice_start_seconds: number | null;
+  voice_end_seconds: number | null;
+  ownerId: string;
 }
 
 export interface SongsJsonEntry {
   number: number;
   feeling_key: string;
+  admin_feeling: AdminFeeling;
   title: string;
   theme: string;
   lyric: string;
   duration_seconds: number;
   mood: string;
   tempo_bpm: number;
+  words_heard_pct: number | null;
+  transcribed_text: string | null;
+  missing_words: string[];
+  extra_words: string[];
+  voice_start_seconds: number | null;
+  voice_end_seconds: number | null;
 }
 
 export function formatSongFilename(number: number, feelingKey: string, ext: "wav" | "mp3" = "wav"): string {

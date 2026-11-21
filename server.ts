@@ -1,26 +1,74 @@
 import "dotenv/config";
-import express from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import fs from "fs";
+import os from "os";
 import path from "path";
+import crypto from "crypto";
 import { execFile } from "child_process";
 import { promisify } from "util";
-import JSZip from "jszip";
-import { GoogleGenAI } from "@google/genai";
+import ffmpegStatic from "ffmpeg-static";
+import { GoogleGenAI, Type } from "@google/genai";
+import { getApp, getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+import { INITIAL_SONGS, type SongSpec } from "./src/data/songs.ts";
 import {
-  INITIAL_SONGS,
-  formatSongFilename,
-  type SongState,
-  type SongsJsonEntry,
-} from "./src/data/songs.ts";
+  compareTranscriptInOrder,
+  validateLyrics,
+} from "./src/lib/lyricQuality.ts";
 
 const execFileAsync = promisify(execFile);
+const FFMPEG_BIN =
+  typeof ffmpegStatic === "string" && fs.existsSync(ffmpegStatic)
+    ? ffmpegStatic
+    : "ffmpeg";
 
 const PORT = Number(process.env.PORT || 3000);
-const AUDIO_DIR = path.resolve(process.cwd(), ".generated_audio");
-const STATE_FILE = path.join(AUDIO_DIR, "state.json");
 
-if (!fs.existsSync(AUDIO_DIR)) {
-  fs.mkdirSync(AUDIO_DIR, { recursive: true });
+const firebaseConfig = JSON.parse(
+  fs.readFileSync(path.resolve(process.cwd(), "firebase-applet-config.json"), "utf8")
+) as { projectId: string; storageBucket: string };
+
+const adminApp = getApps().length
+  ? getApp()
+  : initializeApp({ projectId: firebaseConfig.projectId });
+const adminAuth = getAuth(adminApp);
+
+interface AuthenticatedRequest extends Request {
+  user?: {
+    uid: string;
+    email: string;
+  };
+}
+
+async function requireAuth(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const header = req.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) {
+    res.status(401).json({ error: "Authentication required. Please sign in with Google." });
+    return;
+  }
+  const idToken = header.slice("Bearer ".length).trim();
+  if (!idToken) {
+    res.status(401).json({ error: "Authentication token missing." });
+    return;
+  }
+  try {
+    const decoded = await adminAuth.verifyIdToken(idToken);
+    if (!decoded.email_verified) {
+      res.status(403).json({ error: "Verified Google email is required." });
+      return;
+    }
+    req.user = {
+      uid: decoded.uid,
+      email: decoded.email || "",
+    };
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid or expired sign-in session. Please sign in again." });
+  }
 }
 
 function getGenAI(): GoogleGenAI {
@@ -31,6 +79,7 @@ function getGenAI(): GoogleGenAI {
   return new GoogleGenAI({
     apiKey,
     httpOptions: {
+      apiVersion: "v1beta",
       headers: {
         "User-Agent": "aistudio-build",
       },
@@ -38,100 +87,85 @@ function getGenAI(): GoogleGenAI {
   });
 }
 
-function buildInitialState(): SongState[] {
-  return INITIAL_SONGS.map((song) => ({
-    ...song,
-    status: "pending",
-    duration_seconds: null,
-    audio_url: null,
-    file_name: formatSongFilename(song.number, song.feeling_key, "wav"),
-    format: "wav",
-    lufs: null,
-    true_peak_db: null,
-    error_message: null,
-    generated_at: null,
-  }));
-}
-
-function loadState(): SongState[] {
-  const defaults = buildInitialState();
-  if (!fs.existsSync(STATE_FILE)) {
-    return defaults;
-  }
-  try {
-    const raw = fs.readFileSync(STATE_FILE, "utf8");
-    const saved = JSON.parse(raw) as Partial<SongState>[];
-    return defaults.map((def) => {
-      const match = saved.find((s) => s.number === def.number);
-      if (!match) return def;
-      const fileName = formatSongFilename(def.number, def.feeling_key, match.format === "mp3" ? "mp3" : "wav");
-      const fileExists = fs.existsSync(path.join(AUDIO_DIR, fileName));
-      const status = match.status === "ready" && fileExists ? "ready" : match.status === "error" ? "error" : "pending";
-      return {
-        ...def,
-        title: match.title || def.title,
-        theme: match.theme || def.theme,
-        lines: Array.isArray(match.lines) && match.lines.length === 4 ? (match.lines as [string, string, string, string]) : def.lines,
-        mood: match.mood || def.mood,
-        tempo_bpm: typeof match.tempo_bpm === "number" ? match.tempo_bpm : def.tempo_bpm,
-        instruments: match.instruments || def.instruments,
-        vocal_tone: match.vocal_tone || def.vocal_tone,
-        status,
-        duration_seconds: fileExists && typeof match.duration_seconds === "number" ? match.duration_seconds : null,
-        audio_url: fileExists ? `/api/audio/${fileName}?v=${encodeURIComponent(match.generated_at || "1")}` : null,
-        file_name: fileName,
-        format: match.format === "mp3" ? "mp3" : "wav",
-        lufs: fileExists && typeof match.lufs === "number" ? match.lufs : null,
-        true_peak_db: fileExists && typeof match.true_peak_db === "number" ? match.true_peak_db : null,
-        error_message: status === "error" ? match.error_message || null : null,
-        generated_at: fileExists ? match.generated_at || null : null,
-      };
-    });
-  } catch {
-    return defaults;
-  }
-}
-
-function saveState(songs: SongState[]): void {
-  fs.writeFileSync(STATE_FILE, JSON.stringify(songs, null, 2), "utf8");
-}
-
-let songsState: SongState[] = loadState();
-
-function buildLyriaPrompt(song: SongState): string {
-  const lyricsBlock = song.lines.map((line, i) => `Line ${i + 1}: ${line}`).join("\n");
+function buildLyriaPrompt(song: SongSpec): string {
+  const lyricsBlock = song.lines.join("\n");
   return [
-    `Create a warm, emotional 38-second Moroccan acoustic song for a family video.`,
+    `Moroccan acoustic family song, length about 40 seconds, ending with 4-5 seconds of soft instrumental only.`,
+    `Start singing immediately within the first 1 second (no long instrumental intro) and finish all vocals before 27 seconds, followed by soft instrumental only.`,
     `Theme: ${song.theme}.`,
     `Mood: ${song.mood}.`,
     `Tempo: ${song.tempo_bpm} BPM.`,
     `Instrumentation: ${song.instruments}. Warm North African acoustic feel.`,
-    `Vocal direction: ${song.vocal_tone}. Sung in natural Moroccan Darija Arabic ONLY.`,
-    `Mixing & vocal clarity (CRITICAL):`,
-    `- One clear solo lead voice, sung slowly and clearly so every single Arabic word is easy to hear.`,
-    `- Keep the lead voice loud and upfront in the mix, and keep the acoustic instruments softer underneath.`,
-    `- Clean dry studio vocal: NO heavy echo or reverb, NO autotune effects, NO backing choir over the words, NO rap, NO distortion.`,
-    `Song structure (35 to 42 seconds total):`,
-    `- 2-second soft acoustic instrumental intro.`,
-    `- Sing these exact 4 Moroccan Darija lines once slowly and clearly:`,
+    `Vocals: ${song.vocal_tone}. Sung slowly and clearly in natural Moroccan Darija Arabic ONLY, with the exact ${song.lines.length} lyric lines below.`,
+    `Mixing & vocal clarity:`,
+    `- One clear solo lead voice, loud and upfront in the mix, with softer acoustic accompaniment underneath.`,
+    `- Clean dry studio vocal: no heavy echo, no autotune effects, no choir over the words, no rap, no distortion.`,
+    `[Verse]`,
     lyricsBlock,
-    `- Then softly repeat Line 1 once ("${song.lines[0]}") as a warm closing phrase.`,
-    `- End with 4 to 5 seconds of soft instrumental music only (no singing, no voice), fading gently so a spoken line can be added later.`,
+    ``,
+    `End with 4-5 seconds of soft instrumental only (no voice).`,
   ].join("\n");
 }
 
+function readWavDurationSeconds(filePath: string): number | null {
+  try {
+    const buf = fs.readFileSync(filePath);
+    if (
+      buf.length < 44 ||
+      buf.toString("ascii", 0, 4) !== "RIFF" ||
+      buf.toString("ascii", 8, 12) !== "WAVE"
+    ) {
+      return null;
+    }
+    let offset = 12;
+    let byteRate = 0;
+    let dataSize = 0;
+    while (offset + 8 <= buf.length) {
+      const chunkId = buf.toString("ascii", offset, offset + 4);
+      const chunkSize = buf.readUInt32LE(offset + 4);
+      if (chunkId === "fmt " && offset + 24 <= buf.length) {
+        byteRate = buf.readUInt32LE(offset + 16);
+      } else if (chunkId === "data") {
+        dataSize = chunkSize;
+        break;
+      }
+      offset += 8 + chunkSize + (chunkSize % 2);
+    }
+    if (byteRate > 0 && dataSize > 0) {
+      return dataSize / byteRate;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function probeDuration(filePath: string): Promise<number> {
-  const { stdout } = await execFileAsync("ffprobe", [
-    "-v",
-    "error",
-    "-show_entries",
-    "format=duration",
-    "-of",
-    "default=noprint_wrappers=1:nokey=1",
-    filePath,
-  ]);
-  const val = parseFloat(stdout.trim());
-  return Number.isFinite(val) ? val : 0;
+  if (filePath.endsWith(".wav")) {
+    const wavDur = readWavDurationSeconds(filePath);
+    if (wavDur !== null && Number.isFinite(wavDur) && wavDur > 0) {
+      return wavDur;
+    }
+  }
+
+  let stderrText = "";
+  try {
+    const res = await execFileAsync(FFMPEG_BIN, ["-hide_banner", "-i", filePath]);
+    stderrText = res.stderr || "";
+  } catch (err) {
+    const e = err as { stderr?: string };
+    stderrText = e.stderr || "";
+  }
+
+  const match = stderrText.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+  if (match) {
+    const hours = parseFloat(match[1]);
+    const mins = parseFloat(match[2]);
+    const secs = parseFloat(match[3]);
+    const total = hours * 3600 + mins * 60 + secs;
+    return Number.isFinite(total) ? total : 0;
+  }
+  return 0;
 }
 
 interface LoudnormStats {
@@ -144,7 +178,10 @@ interface LoudnormStats {
   output_tp?: string;
 }
 
-async function masterAudioToWav(rawFilePath: string, outputWavPath: string): Promise<{
+async function masterAudioToWav(
+  rawFilePath: string,
+  outputWavPath: string
+): Promise<{
   durationSeconds: number;
   lufs: number;
   truePeakDb: number;
@@ -173,7 +210,9 @@ async function masterAudioToWav(rawFilePath: string, outputWavPath: string): Pro
       "null",
       "-",
     ];
-    const { stderr: pass1Stderr } = await execFileAsync("ffmpeg", pass1Args, { maxBuffer: 10 * 1024 * 1024 });
+    const { stderr: pass1Stderr } = await execFileAsync(FFMPEG_BIN, pass1Args, {
+      maxBuffer: 10 * 1024 * 1024,
+    });
     const jsonMatch = pass1Stderr.match(/\{\s*"input_i"\s*:[\s\S]*?\}/);
     if (jsonMatch) {
       const stats = JSON.parse(jsonMatch[0]) as LoudnormStats;
@@ -183,7 +222,7 @@ async function masterAudioToWav(rawFilePath: string, outputWavPath: string): Pro
       ].join(",");
 
       const { stderr: pass2Stderr } = await execFileAsync(
-        "ffmpeg",
+        FFMPEG_BIN,
         [
           "-y",
           "-i",
@@ -214,7 +253,7 @@ async function masterAudioToWav(rawFilePath: string, outputWavPath: string): Pro
   } catch {
     // Fallback single-pass loudnorm to guarantee -14 LUFS and <= -1 dBTP
     await execFileAsync(
-      "ffmpeg",
+      FFMPEG_BIN,
       [
         "-y",
         "-i",
@@ -241,255 +280,352 @@ async function masterAudioToWav(rawFilePath: string, outputWavPath: string): Pro
   };
 }
 
-const activeGenerations = new Set<number>();
+interface VocalQualityAnalysis {
+  words_heard_pct: number;
+  transcribed_text: string;
+  missing_words: string[];
+  extra_words: string[];
+  voice_start_seconds: number | null;
+  voice_end_seconds: number | null;
+}
+
+async function analyzeGeneratedVocals(
+  ai: GoogleGenAI,
+  wavPath: string,
+  mp3ScratchPath: string,
+  lyricLines: string[],
+  durationSeconds: number
+): Promise<VocalQualityAnalysis> {
+  // Compress temporarily to mono 16kHz MP3 so Gemini audio analysis is compact and fast
+  let audioPath = wavPath;
+  let mimeType = "audio/wav";
+  try {
+    await execFileAsync(
+      FFMPEG_BIN,
+      ["-y", "-i", wavPath, "-ac", "1", "-ar", "16000", "-b:a", "64k", mp3ScratchPath],
+      { maxBuffer: 5 * 1024 * 1024 }
+    );
+    if (fs.existsSync(mp3ScratchPath)) {
+      audioPath = mp3ScratchPath;
+      mimeType = "audio/mp3";
+    }
+  } catch {
+    audioPath = wavPath;
+    mimeType = "audio/wav";
+  }
+
+  const audioBase64 = fs.readFileSync(audioPath).toString("base64");
+  const audioPart = {
+    inlineData: {
+      mimeType,
+      data: audioBase64,
+    },
+  };
+
+  const [transcribeRes, timingRes] = await Promise.allSettled([
+    ai.models.generateContent({
+      model: "gemini-3.5-transcribe",
+      contents: {
+        parts: [
+          audioPart,
+          {
+            text: "Transcribe all sung Moroccan Darija Arabic words in exact spoken/sung order as Arabic script only.",
+          },
+        ],
+      },
+    }),
+    ai.models.generateContent({
+      model: "gemini-4-hydrogen",
+      contents: {
+        parts: [
+          audioPart,
+          {
+            text: [
+              `Listen carefully to this ${durationSeconds.toFixed(1)}-second audio track.`,
+              `Determine:`,
+              `1. voice_start_seconds: exact timestamp in seconds when the singing voice first starts (e.g. 0.6).`,
+              `2. voice_end_seconds: exact timestamp in seconds when the singing voice completely finishes before the instrumental outro (e.g. 25.4).`,
+              `3. transcript_arabic: exact Moroccan Darija Arabic words actually sung by the vocalist in order (Arabic script only, no commentary).`,
+            ].join("\n"),
+          },
+        ],
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            voice_start_seconds: { type: Type.NUMBER },
+            voice_end_seconds: { type: Type.NUMBER },
+            transcript_arabic: { type: Type.STRING },
+          },
+          required: ["voice_start_seconds", "voice_end_seconds", "transcript_arabic"],
+        },
+      },
+    }),
+  ]);
+
+  let transcribeText = "";
+  if (transcribeRes.status === "fulfilled") {
+    transcribeText = (transcribeRes.value.text ?? "").trim();
+  }
+
+  let voiceStart: number | null = null;
+  let voiceEnd: number | null = null;
+  let timingTranscript = "";
+
+  if (timingRes.status === "fulfilled") {
+    const rawJson = (timingRes.value.text ?? "").trim();
+    try {
+      const parsed = JSON.parse(rawJson) as {
+        voice_start_seconds?: number;
+        voice_end_seconds?: number;
+        transcript_arabic?: string;
+      };
+      if (typeof parsed.voice_start_seconds === "number" && Number.isFinite(parsed.voice_start_seconds)) {
+        const clampedStart = Math.max(0, Math.min(durationSeconds, parsed.voice_start_seconds));
+        voiceStart = Number(clampedStart.toFixed(1));
+      }
+      if (typeof parsed.voice_end_seconds === "number" && Number.isFinite(parsed.voice_end_seconds)) {
+        const minEnd = voiceStart ?? 0;
+        const clampedEnd = Math.max(minEnd, Math.min(durationSeconds, parsed.voice_end_seconds));
+        voiceEnd = Number(clampedEnd.toFixed(1));
+      }
+      if (typeof parsed.transcript_arabic === "string") {
+        timingTranscript = parsed.transcript_arabic.trim();
+      }
+    } catch {
+      // Fall through if JSON parsing failed
+    }
+  }
+
+  const finalTranscript = transcribeText || timingTranscript;
+  if (!finalTranscript && transcribeRes.status === "rejected" && timingRes.status === "rejected") {
+    throw new Error("Gemini vocal transcription & timing check failed.");
+  }
+
+  const comparison = compareTranscriptInOrder(lyricLines, finalTranscript);
+  return {
+    words_heard_pct: comparison.words_heard_pct,
+    transcribed_text: comparison.transcribed_text.slice(0, 600),
+    missing_words: comparison.missing_words.slice(0, 40),
+    extra_words: comparison.extra_words.slice(0, 40),
+    voice_start_seconds: voiceStart,
+    voice_end_seconds: voiceEnd,
+  };
+}
+
+const activeGenerations = new Set<string>();
 
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: "2mb" }));
 
-  app.get("/api/songs", (_req, res) => {
-    res.json({ songs: songsState });
-  });
+  // Generate & master a single song in temporary /tmp scratch space and stream WAV back.
+  // Never persists audio or state to local server disk.
+  app.post(
+    "/api/songs/:number/generate",
+    requireAuth,
+    async (req: AuthenticatedRequest, res: Response) => {
+      const num = Number(req.params.number);
+      const baseSpec = INITIAL_SONGS.find((s) => s.number === num);
+      if (!baseSpec) {
+        res.status(404).json({ error: `Song #${num} not found` });
+        return;
+      }
 
-  app.put("/api/songs/:number", (req, res) => {
-    const num = Number(req.params.number);
-    const idx = songsState.findIndex((s) => s.number === num);
-    if (idx === -1) {
-      res.status(404).json({ error: `Song #${num} not found` });
-      return;
-    }
+      const lockKey = `${req.user?.uid}:${num}`;
+      if (activeGenerations.has(lockKey)) {
+        res.status(409).json({ error: `Song #${num} is already generating` });
+        return;
+      }
 
-    const body = req.body as Partial<SongState>;
-    const current = songsState[idx];
+      const body = (req.body || {}) as Partial<SongSpec> & { model?: string };
+      const modelName =
+        body.model === "lyria-3-clip-preview" ? "lyria-3-clip-preview" : "lyria-3.5";
 
-    const updatedLines =
-      Array.isArray(body.lines) && body.lines.length === 4
-        ? (body.lines.map((l) => String(l).trim()) as [string, string, string, string])
-        : current.lines;
+      const lines = Array.isArray(body.lines)
+        ? body.lines.map((l) => String(l).trim().slice(0, 240))
+        : baseSpec.lines;
 
-    const updatedTempo =
-      typeof body.tempo_bpm === "number" && body.tempo_bpm >= 70 && body.tempo_bpm <= 100
-        ? Math.round(body.tempo_bpm)
-        : current.tempo_bpm;
+      const lyricCheck = validateLyrics(lines);
+      if (!lyricCheck.valid) {
+        res.status(400).json({
+          error: `Lyric rule violation: ${lyricCheck.errors.join(" ")}`,
+        });
+        return;
+      }
 
-    songsState[idx] = {
-      ...current,
-      title: typeof body.title === "string" && body.title.trim() ? body.title.trim() : current.title,
-      theme: typeof body.theme === "string" && body.theme.trim() ? body.theme.trim() : current.theme,
-      lines: updatedLines,
-      mood: typeof body.mood === "string" && body.mood.trim() ? body.mood.trim() : current.mood,
-      tempo_bpm: updatedTempo,
-      instruments:
-        typeof body.instruments === "string" && body.instruments.trim()
-          ? body.instruments.trim()
-          : current.instruments,
-      vocal_tone:
-        typeof body.vocal_tone === "string" && body.vocal_tone.trim()
-          ? body.vocal_tone.trim()
-          : current.vocal_tone,
-    };
+      const tempoBpm =
+        typeof body.tempo_bpm === "number" &&
+        body.tempo_bpm >= 70 &&
+        body.tempo_bpm <= 100
+          ? Math.round(body.tempo_bpm)
+          : baseSpec.tempo_bpm;
 
-    saveState(songsState);
-    res.json({ song: songsState[idx] });
-  });
+      const songSpec: SongSpec = {
+        number: baseSpec.number,
+        feeling_key: baseSpec.feeling_key,
+        title:
+          typeof body.title === "string" && body.title.trim()
+            ? body.title.trim().slice(0, 120)
+            : baseSpec.title,
+        theme:
+          typeof body.theme === "string" && body.theme.trim()
+            ? body.theme.trim().slice(0, 240)
+            : baseSpec.theme,
+        lines,
+        mood:
+          typeof body.mood === "string" && body.mood.trim()
+            ? body.mood.trim().slice(0, 80)
+            : baseSpec.mood,
+        tempo_bpm: tempoBpm,
+        instruments:
+          typeof body.instruments === "string" && body.instruments.trim()
+            ? body.instruments.trim().slice(0, 300)
+            : baseSpec.instruments,
+        vocal_tone:
+          typeof body.vocal_tone === "string" && body.vocal_tone.trim()
+            ? body.vocal_tone.trim().slice(0, 300)
+            : baseSpec.vocal_tone,
+      };
 
-  app.post("/api/songs/:number/generate", async (req, res) => {
-    const num = Number(req.params.number);
-    const idx = songsState.findIndex((s) => s.number === num);
-    if (idx === -1) {
-      res.status(404).json({ error: `Song #${num} not found` });
-      return;
-    }
-    if (activeGenerations.has(num)) {
-      res.status(409).json({ error: `Song #${num} is already generating` });
-      return;
-    }
+      activeGenerations.add(lockKey);
+      const jobId = crypto.randomUUID();
+      let typedRawPath: string | null = null;
+      const tmpWavPath = path.join(os.tmpdir(), `darija-${num}-${jobId}-master.wav`);
+      const tmpAnalyzeMp3Path = path.join(os.tmpdir(), `darija-${num}-${jobId}-analyze.mp3`);
 
-    const requestedModel = (req.body as { model?: string } | undefined)?.model;
-    const modelName =
-      requestedModel === "lyria-3-clip-preview" ? "lyria-3-clip-preview" : "lyria-3-pro-preview";
+      try {
+        const ai = getGenAI();
+        const prompt = buildLyriaPrompt(songSpec);
 
-    activeGenerations.add(num);
-    songsState[idx] = {
-      ...songsState[idx],
-      status: "generating",
-      error_message: null,
-    };
+        const stream = await ai.models.generateContentStream({
+          model: modelName,
+          contents: prompt,
+        });
 
-    const song = songsState[idx];
-    const rawTmpPath = path.join(AUDIO_DIR, `raw-${song.number}-${Date.now()}.bin`);
-    const wavFilename = formatSongFilename(song.number, song.feeling_key, "wav");
-    const outputWavPath = path.join(AUDIO_DIR, wavFilename);
+        const audioChunks: Buffer[] = [];
+        let mimeType = "audio/mpeg";
 
-    try {
-      const ai = getGenAI();
-      const prompt = buildLyriaPrompt(song);
-
-      const stream = await ai.models.generateContentStream({
-        model: modelName,
-        contents: prompt,
-      });
-
-      const audioChunks: Buffer[] = [];
-      let mimeType = "audio/mpeg";
-
-      for await (const chunk of stream) {
-        const parts = chunk.candidates?.[0]?.content?.parts;
-        if (!parts) continue;
-        for (const part of parts) {
-          if (part.inlineData?.data) {
-            if (audioChunks.length === 0 && part.inlineData.mimeType) {
-              mimeType = part.inlineData.mimeType;
+        for await (const chunk of stream) {
+          const parts = chunk.candidates?.[0]?.content?.parts;
+          if (!parts) continue;
+          for (const part of parts) {
+            if (part.inlineData?.data) {
+              if (audioChunks.length === 0 && part.inlineData.mimeType) {
+                mimeType = part.inlineData.mimeType;
+              }
+              audioChunks.push(Buffer.from(part.inlineData.data, "base64"));
             }
-            audioChunks.push(Buffer.from(part.inlineData.data, "base64"));
           }
         }
-      }
 
-      if (audioChunks.length === 0) {
-        throw new Error("Lyria returned no audio data for this prompt.");
-      }
+        if (audioChunks.length === 0) {
+          throw new Error("Lyria returned no audio data for this prompt.");
+        }
 
-      const rawBuffer = Buffer.concat(audioChunks);
-      const rawExt = mimeType.includes("wav") ? ".wav" : ".mp3";
-      const typedRawPath = rawTmpPath.replace(/\.bin$/, rawExt);
-      fs.writeFileSync(typedRawPath, rawBuffer);
+        const rawBuffer = Buffer.concat(audioChunks);
+        const rawExt = mimeType.includes("wav") ? ".wav" : ".mp3";
+        typedRawPath = path.join(os.tmpdir(), `darija-${num}-${jobId}-raw${rawExt}`);
+        fs.writeFileSync(typedRawPath, rawBuffer);
 
-      const mastered = await masterAudioToWav(typedRawPath, outputWavPath);
+        const mastered = await masterAudioToWav(typedRawPath, tmpWavPath);
+        const qualityReport = await analyzeGeneratedVocals(
+          ai,
+          tmpWavPath,
+          tmpAnalyzeMp3Path,
+          songSpec.lines,
+          mastered.durationSeconds
+        );
+        const wavBuffer = fs.readFileSync(tmpWavPath);
+        const encodedReport = Buffer.from(JSON.stringify(qualityReport), "utf8").toString(
+          "base64"
+        );
 
-      if (fs.existsSync(typedRawPath)) {
-        fs.unlinkSync(typedRawPath);
-      }
+        res.setHeader("Content-Type", "audio/wav");
+        res.setHeader("Content-Length", String(wavBuffer.length));
+        res.setHeader("X-Duration-Seconds", String(mastered.durationSeconds));
+        res.setHeader("X-Lufs", String(mastered.lufs));
+        res.setHeader("X-True-Peak-Db", String(mastered.truePeakDb));
+        res.setHeader("X-Model-Used", modelName);
+        res.setHeader("X-Quality-Report", encodedReport);
+        res.send(wavBuffer);
+      } catch (err) {
+        const rawMessage =
+          err instanceof Error ? err.message : "Failed to generate audio with Lyria.";
+        const isNotFound =
+          rawMessage.includes("404") ||
+          rawMessage.includes("NOT_FOUND") ||
+          rawMessage.toLowerCase().includes("is not found");
 
-      const generatedAt = new Date().toISOString();
-      songsState[idx] = {
-        ...songsState[idx],
-        status: "ready",
-        duration_seconds: mastered.durationSeconds,
-        audio_url: `/api/audio/${wavFilename}?v=${encodeURIComponent(generatedAt)}`,
-        file_name: wavFilename,
-        format: "wav",
-        lufs: mastered.lufs,
-        true_peak_db: mastered.truePeakDb,
-        error_message: null,
-        generated_at: generatedAt,
-      };
-      saveState(songsState);
-
-      res.json({ song: songsState[idx] });
-    } catch (err) {
-      if (fs.existsSync(rawTmpPath)) {
-        fs.unlinkSync(rawTmpPath);
-      }
-      const message = err instanceof Error ? err.message : "Failed to generate audio with Lyria.";
-      songsState[idx] = {
-        ...songsState[idx],
-        status: "error",
-        error_message: message,
-      };
-      saveState(songsState);
-
-      const statusCode =
-        message.includes("PERMISSION_DENIED") || message.includes("403")
+        const statusCode = isNotFound
+          ? 404
+          : rawMessage.includes("PERMISSION_DENIED") || rawMessage.includes("403")
           ? 403
-          : message.includes("RESOURCE_EXHAUSTED") || message.includes("429")
+          : rawMessage.includes("RESOURCE_EXHAUSTED") || rawMessage.includes("429")
           ? 429
           : 500;
 
-      res.status(statusCode).json({ error: message, song: songsState[idx] });
-    } finally {
-      activeGenerations.delete(num);
-    }
-  });
+        const message = isNotFound
+          ? `Model "${modelName}" returned 404 (not found for API version v1beta). Try switching to "lyria-3-clip-preview" or check model availability. Details: ${rawMessage}`
+          : rawMessage;
 
-  app.post("/api/songs/reset-lyrics", (_req, res) => {
-    const defaults = buildInitialState();
-    songsState = songsState.map((existing) => {
-      const def = defaults.find((d) => d.number === existing.number);
-      if (!def) return existing;
-      return {
-        ...existing,
-        title: def.title,
-        theme: def.theme,
-        lines: def.lines,
-        mood: def.mood,
-        tempo_bpm: def.tempo_bpm,
-        instruments: def.instruments,
-        vocal_tone: def.vocal_tone,
-      };
-    });
-    saveState(songsState);
-    res.json({ songs: songsState });
-  });
-
-  app.get("/api/audio/:filename", (req, res) => {
-    const safeName = path.basename(req.params.filename);
-    const filePath = path.join(AUDIO_DIR, safeName);
-    if (!fs.existsSync(filePath)) {
-      res.status(404).json({ error: "Audio file not found" });
-      return;
-    }
-    res.setHeader("Content-Type", safeName.endsWith(".mp3") ? "audio/mpeg" : "audio/wav");
-    res.setHeader("Accept-Ranges", "bytes");
-    res.sendFile(filePath);
-  });
-
-  app.get("/api/songs.json", (_req, res) => {
-    const manifest: SongsJsonEntry[] = songsState.map((s) => ({
-      number: s.number,
-      feeling_key: s.feeling_key,
-      title: s.title,
-      theme: s.theme,
-      lyric: s.lines.join(" / "),
-      duration_seconds: s.duration_seconds ?? 0,
-      mood: s.mood,
-      tempo_bpm: s.tempo_bpm,
-    }));
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.send(JSON.stringify(manifest, null, 2));
-  });
-
-  app.get("/api/download-all", async (_req, res) => {
-    try {
-      const zip = new JSZip();
-      const manifest: SongsJsonEntry[] = [];
-
-      for (const song of songsState) {
-        const fileName = formatSongFilename(song.number, song.feeling_key, song.format);
-        const filePath = path.join(AUDIO_DIR, fileName);
-        if (fs.existsSync(filePath)) {
-          const data = fs.readFileSync(filePath);
-          zip.file(fileName, data);
+        res.status(statusCode).json({ error: message });
+      } finally {
+        activeGenerations.delete(lockKey);
+        if (typedRawPath && fs.existsSync(typedRawPath)) {
+          fs.unlinkSync(typedRawPath);
         }
-        manifest.push({
-          number: song.number,
-          feeling_key: song.feeling_key,
-          title: song.title,
-          theme: song.theme,
-          lyric: song.lines.join(" / "),
-          duration_seconds: song.duration_seconds ?? 0,
-          mood: song.mood,
-          tempo_bpm: song.tempo_bpm,
-        });
+        if (fs.existsSync(tmpWavPath)) {
+          fs.unlinkSync(tmpWavPath);
+        }
+        if (fs.existsSync(tmpAnalyzeMp3Path)) {
+          fs.unlinkSync(tmpAnalyzeMp3Path);
+        }
       }
-
-      zip.file("songs.json", JSON.stringify(manifest, null, 2));
-
-      const zipBuffer = await zip.generateAsync({
-        type: "nodebuffer",
-        compression: "DEFLATE",
-        compressionOptions: { level: 6 },
-      });
-
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader("Content-Disposition", 'attachment; filename="darija-family-songs-pack.zip"');
-      res.setHeader("Content-Length", String(zipBuffer.length));
-      res.send(zipBuffer);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Failed to build ZIP archive";
-      res.status(500).json({ error: message });
     }
-  });
+  );
+
+  // Authenticated Cloud Storage proxy strictly locked to our project's Firebase Storage bucket.
+  // Used as CORS-safe fallback when assembling ZIPs or backing up an old WAV during regenerate.
+  app.post(
+    "/api/storage-proxy",
+    requireAuth,
+    async (req: AuthenticatedRequest, res: Response) => {
+      try {
+        const rawUrl = (req.body as { url?: unknown } | undefined)?.url;
+        if (typeof rawUrl !== "string" || !rawUrl) {
+          res.status(400).json({ error: "Missing storage URL" });
+          return;
+        }
+        const parsed = new URL(rawUrl);
+        const expectedPrefix = `/v0/b/${firebaseConfig.storageBucket}/o/`;
+        if (
+          parsed.protocol !== "https:" ||
+          parsed.hostname !== "firebasestorage.googleapis.com" ||
+          !parsed.pathname.startsWith(expectedPrefix)
+        ) {
+          res.status(403).json({ error: "Forbidden storage URL" });
+          return;
+        }
+
+        const upstream = await fetch(parsed.toString());
+        if (!upstream.ok) {
+          res.status(upstream.status).json({ error: `Storage fetch failed (${upstream.status})` });
+          return;
+        }
+        const arrBuf = await upstream.arrayBuffer();
+        const buf = Buffer.from(arrBuf);
+        res.setHeader("Content-Type", upstream.headers.get("content-type") || "audio/wav");
+        res.setHeader("Content-Length", String(buf.length));
+        res.send(buf);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to fetch from Cloud Storage";
+        res.status(500).json({ error: msg });
+      }
+    }
+  );
 
   if (process.env.NODE_ENV !== "production") {
     const { createServer: createViteServer } = await import("vite");
