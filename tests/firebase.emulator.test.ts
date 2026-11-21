@@ -11,7 +11,7 @@ import { reserveBudget, hash } from "../server/limits.ts";
 import { lyricRevision, migrateCatalog } from "../server/migration.ts";
 import { renderRules } from "../scripts/render-rules.ts";
 import { INITIAL_SONGS } from "../src/data/songs.ts";
-import { encodeMp3 } from "../server/audio.ts";
+import { encodeMp3 } from "../server/ffmpeg.ts";
 import { tone } from "./audioFixture.ts";
 
 const projectId = "demo-darija-studio";

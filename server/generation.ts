@@ -3,7 +3,7 @@ import type { DocumentData, Firestore } from "firebase-admin/firestore";
 import type { SongTake } from "../src/data/songs.ts";
 import { compareTranscriptInOrder } from "../src/lib/lyricQuality.ts";
 import { audioFailures, decideRepairAction, repeatedExtras, type GenerationStage, type RepairLogEntry } from "../src/lib/songRepair.ts";
-import { masterWav } from "./audio.ts";
+import { masterWav } from "./ffmpeg.ts";
 import { assertLyrics, takeProjection } from "./catalog.ts";
 import type { FirebaseServices } from "./config.ts";
 import { HttpError } from "./errors.ts";

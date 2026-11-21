@@ -23,6 +23,7 @@
     "@seydx/node-av-ffmpeg-lgpl": "7.1.0",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
+    "ffmpeg-static": "5.3.0",
     "firebase": "^13.4.0",
     "firebase-admin": "^14.5.1",
     "jszip": "^3.10.2",

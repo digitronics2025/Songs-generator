@@ -6,11 +6,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../server.ts";
 import type { FirebaseServices } from "../server/config.ts";
 import { authFailure, DATA_CONFIGURATION, SIGN_IN_CONFIGURATION } from "../server/firebaseErrors.ts";
+import * as ffmpegProcess from "../server/ffmpegProcess.ts";
 
 const owner = "owner@example.test";
 const header = { Authorization: "Bearer local-test-owner-token" };
 const signedFixture = "https://example.test/private?X-Goog-Signature=fixture";
 let server: Server | undefined;
+const bundledHealth = {
+  ffmpeg_candidate: "bundled", ffmpeg_present: true, ffmpeg_version: expect.any(String),
+  loudnorm: true, libmp3lame: true, ffmpeg_master_test: true, ffmpeg_last_failure: null,
+  ffmpeg_candidates: [
+    { candidate: "bundled", status: "selected", failures: [] },
+    { candidate: "ffmpeg-static", status: "not_tried", failures: [] },
+    { candidate: "PATH", status: "not_tried", failures: [] },
+  ],
+};
 
 afterEach(async () => {
   if (server) await new Promise<void>((resolve) => server?.close(() => resolve()));
@@ -142,7 +152,7 @@ describe("owner verification and setup health", () => {
     expect(await response.json()).toEqual({
       ok: true, token_verified: true, firestore: true, storage_read: true,
       storage_list: true, signed_url: true, owner_count: 1, gemini_key_present: true,
-      ffmpeg_present: true, ffmpeg_version: expect.any(String), loudnorm: true, libmp3lame: true, ffmpeg_master_test: true,
+      ...bundledHealth,
     });
     expect(app.db.doc).toHaveBeenCalledWith("settings/app_settings");
     expect(app.db.runTransaction).not.toHaveBeenCalled();
@@ -151,17 +161,48 @@ describe("owner verification and setup health", () => {
     expect(app.bucket.getSignedUrl).toHaveBeenCalledWith({ version: "v4", action: "read", expires: expect.any(Number) });
   });
 
-  it("rejects a missing FFmpeg executable without falling back to PATH", async () => {
+  it("reports why the override failed and the selected fallback only to the owner", async () => {
     vi.stubEnv("GEMINI_API_KEY", "local-test-configured-value");
-    vi.stubEnv("FFMPEG_PATH", join(tmpdir(), "studio-missing-ffmpeg-test", "ffmpeg"));
-    const app = dependencies();
-    const url = await launch(app);
+    const override = join(tmpdir(), "studio-missing-ffmpeg-test", "ffmpeg");
+    vi.stubEnv("FFMPEG_PATH", override);
+    const url = await launch(dependencies());
     const response = await fetch(url + "/api/health/setup", { headers: header });
-    expect(response.status).toBe(503);
-    expect(await response.json()).toMatchObject({
-      ok: false, firestore: true, ffmpeg_present: false, ffmpeg_version: null,
-      loudnorm: false, libmp3lame: false, ffmpeg_master_test: false,
+    expect(response.status).toBe(200);
+    const health = await response.json();
+    expect(health).toMatchObject({
+      ok: true, ffmpeg_candidate: "bundled", ffmpeg_master_test: true,
+      ffmpeg_candidates: [
+        { candidate: "FFMPEG_PATH", status: "failed", reason: "No executable file was found for this candidate." },
+        ...bundledHealth.ffmpeg_candidates,
+      ],
     });
+    expect(health).not.toHaveProperty("ffmpeg_path");
+    expect(JSON.stringify(health)).not.toContain(override);
+  });
+
+  it("returns subprocess diagnostics after attempts fail without exposing a configured secret", async () => {
+    const key = "local-test-configured-value";
+    vi.stubEnv("GEMINI_API_KEY", key);
+    vi.stubEnv("FFMPEG_PATH", process.execPath);
+    const run = ffmpegProcess.executeFfmpeg;
+    const logs = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const command = vi.spyOn(ffmpegProcess, "executeFfmpeg").mockImplementation((file, args, options) =>
+      options.candidate === "FFMPEG_PATH" ? run(process.execPath, ["-e",
+        "process.stderr.write(" + JSON.stringify("Loader error " + key) + "); process.exitCode = 23"], options) : run(file, args, options));
+    const url = await launch(dependencies());
+    const response = await fetch(url + "/api/health/setup", { headers: header });
+    expect(response.status).toBe(200);
+    const health = await response.json();
+    const { candidate, status, failures } = health.ffmpeg_candidates[0];
+    expect({ candidate, status }).toEqual({ candidate: "FFMPEG_PATH", status: "failed" });
+    expect(failures).toHaveLength(2);
+    expect(failures[0]).toMatchObject({
+      exit_code: 23, signal: null, killed: false, timed_out: false, elapsed_ms: expect.any(Number),
+      phase: "version", stderr: "Loader error [redacted]",
+    });
+    expect(JSON.stringify(health)).not.toContain(key);
+    expect(JSON.stringify(logs.mock.calls)).not.toContain(key);
+    expect(command).toHaveBeenCalledWith(process.execPath, ["-version"], expect.objectContaining({ timeoutMs: 30_000 }));
   });
 
   it("reports IAM failures independently and keeps the owner diagnostics available when Firestore fails", async () => {
@@ -180,7 +221,7 @@ describe("owner verification and setup health", () => {
     expect(await response.json()).toEqual({
       ok: false, token_verified: true, firestore: false, storage_read: true,
       storage_list: false, signed_url: false, owner_count: 1, gemini_key_present: false,
-      ffmpeg_present: true, ffmpeg_version: expect.any(String), loudnorm: true, libmp3lame: true, ffmpeg_master_test: true,
+      ...bundledHealth,
     });
     expect(log.mock.calls).toHaveLength(3);
     expect(JSON.stringify(log.mock.calls)).not.toContain(signedFixture);

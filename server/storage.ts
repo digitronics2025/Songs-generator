@@ -1,7 +1,7 @@
 import type { FirebaseServices } from "./config.ts";
 import { HttpError } from "./errors.ts";
 import { hash } from "./limits.ts";
-import { encodeMp3 } from "./audio.ts";
+import { encodeMp3 } from "./ffmpeg.ts";
 
 const maxAudio = 25 * 1024 * 1024;
 const objectPath = /^songs\/(?:takes\/(?:[\w-]{1,128}\/)?|cache\/)?[\w.-]{1,190}\.(?:wav|mp3)$/i;

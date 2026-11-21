@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { encodeMp3, masterWav } from "../server/audio.ts";
+import { encodeMp3, masterWav } from "../server/ffmpeg.ts";
 
 import { tone } from "./audioFixture.ts";
 
