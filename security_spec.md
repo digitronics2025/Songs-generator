@@ -2,7 +2,7 @@
 
 ## Identity and access
 
-- The Studio API checks a verified Firebase ID token with provider `google.com`, revocation status and a case-insensitive email in `OWNER_EMAILS`. Missing or invalid tokens receive 401. Valid non-owner identities receive 403. An empty allow-list denies all owner sessions.
+- The Studio API verifies the Firebase ID token signature, issuer, audience and expiry. The token must claim a verified Google email in `OWNER_EMAILS`. `AUTH_CHECK_REVOKED=1` also checks revocation and account status through Firebase Auth. Missing or invalid tokens receive 401. Valid non-owner identities receive 403. Firebase configuration or access failures receive 503. An empty allow-list denies all owner sessions.
 - The partner API under `/api/v1` uses separate scoped bearer keys. The browser generates a 256-bit key once and registers its SHA-256 digest after the owner confirms vault custody. Firestore stores the digest and metadata. Route responses and logs exclude raw keys and hashes.
 - Partner calls are logged with the route name, method, status, client ID where known and duration. A Firestore transaction enforces a rolling 60 requests per minute per partner and updates last use. Studio routes also have a per-user rolling limit and a smaller paid-operation limit.
 - Firebase rules use the owner list rendered from the same environment value. Direct Firestore and Storage writes are denied, including to owners. Studio writes go through the authenticated server. Partner acknowledgements are scoped to approved songs. Internal collections are private to the server.

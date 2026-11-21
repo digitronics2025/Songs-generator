@@ -46,7 +46,7 @@ function formatClock(sec: number): string {
 
 export default function App() {
   const { user, authReady, authLoading, handleSignIn, handleSignOut, songs, historyItems, settings,
-    loading, globalError, setGlobalError, refresh } = useStudio();
+    loading, libraryLoaded, libraryError, globalError, setGlobalError, refresh } = useStudio();
   const { audioRef, activeSongNumber, isPlaying, currentTime, duration, setIsPlaying, setCurrentTime,
     setDuration, handleTogglePlay, handleSeek, handleDownloadSingle } = useStudioAudio(setGlobalError, Boolean(user));
   const { generatingNumbers, handleGenerateSong, handleAddNewSong, handleAddBatchSongs, handleApproveLyric,
@@ -313,6 +313,8 @@ export default function App() {
     }
   };
 
+  const historyLabel = libraryLoaded ? "History (" + historyItems.length + ")" : "History";
+
   if (!authReady) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#F8F8F6] text-sm text-[#57554F]">
@@ -424,7 +426,7 @@ export default function App() {
                     : "border-transparent hover:text-[#141413]"
                 }`}
               >
-                Song Library ({activeSongs.length})
+                Song Library{libraryLoaded && " (" + activeSongs.length + ")"}
               </button>
               <button
                 type="button"
@@ -458,10 +460,10 @@ export default function App() {
               onClick={() => setIsHistoryDrawerOpen(true)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-[#D4D2CA] bg-white px-3 py-1.5 text-xs font-semibold text-[#57554F] hover:bg-[#F3F2EE]"
               title="View permanent lyric history"
-              aria-label={"History (" + historyItems.length + ")"}
+              aria-label={historyLabel}
             >
               <History className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">History ({historyItems.length})</span>
+              <span className="hidden sm:inline">{historyLabel}</span>
             </button>
 
             <button
@@ -500,7 +502,7 @@ export default function App() {
         <div className="mb-4 flex gap-2 border-b border-[#E5E4DF] pb-3 md:hidden">
           {(
             [
-              ["library", `Library (${activeSongs.length})`],
+              ["library", libraryLoaded ? `Library (${activeSongs.length})` : "Library"],
               ["settings", "Settings"],
               ["export", "Export"],
             ] as const
@@ -538,8 +540,17 @@ export default function App() {
           </div>
         )}
 
+        {libraryError && (
+          <div role="alert" className="mb-5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-3 text-xs text-[#991B1B]">
+            <span>{libraryError}</span>
+            <button type="button" onClick={() => void refresh()} className="font-semibold underline">Try again</button>
+          </div>
+        )}
+
         {/* TAB 1: LIBRARY SCREEN */}
-        {activeTab === "library" && (
+        {activeTab === "library" && (libraryError && !libraryLoaded ? (
+          <p className="rounded-xl border border-[#E5E4DF] bg-white py-16 text-center text-sm text-[#6E6C66]">The song library is unavailable.</p>
+        ) : (
           <div className="space-y-5">
             {/* Real Counts Summary Bar (Rule 5) */}
             <section className="rounded-xl border border-[#E5E4DF] bg-white p-4 shadow-xs">
@@ -764,7 +775,7 @@ export default function App() {
               )}
             </div>
           </div>
-        )}
+        ))}
 
         {/* TAB 2: SETTINGS SCREEN */}
         {activeTab === "settings" && (
