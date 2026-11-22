@@ -22,7 +22,7 @@ import { tone } from "./audioFixture.ts";
 
 const projectId = "demo-darija-studio";
 const ownerEmail = "owner@example.test";
-const settings = { daily_budget_usd: 0.10 };
+const settings = { daily_budget_usd: 0.10, rhyme_scheme: "OFF" };
 let env: RulesTestEnvironment;
 let services: FirebaseServices;
 let server: Server;
@@ -175,15 +175,35 @@ describe("real local Express, Auth and Firestore", () => {
     expect(actions).toEqual(expect.arrayContaining(["migrated", "edited", "archived"]));
   });
 
+  it("applies a reviewed rhyme through the edit transaction and rejects stale proposals", async () => {
+    const id = "rhyme-review";
+    const song = services.db.doc("songs/" + id);
+    const original = INITIAL_SONGS[0];
+    const lines = ["تعبانين", "سنين", "حنا", "معانا", "نردوها", "نهديوها"];
+    await services.db.doc("settings/app_settings").set({ rhyme_scheme: "AABB" }, { merge: true });
+    await song.set({ ...original, status: "approved" });
+    const take = song.collection("takes").doc("previous");
+    await take.set({ lyric_revision: lyricRevision(original.title, original.lines) });
+    const headers = { Authorization: "Bearer " + await googleToken(ownerEmail), "Content-Type": "application/json" };
+    const apply = () => fetch(origin + "/api/songs/" + id, { method: "PATCH", headers,
+      body: JSON.stringify({ lines, expected_lines: original.lines }) });
+    expect((await apply()).status).toBe(200);
+    expect((await apply()).status).toBe(409);
+    expect((await song.get()).data()).toMatchObject({ status: "draft", lines });
+    expect((await take.get()).get("lyric_revision")).toBe(lyricRevision(original.title, original.lines));
+    const history = await services.db.collection("song_history").where("song_id", "==", id).get();
+    expect(history.docs.map(doc => doc.get("action"))).toEqual(["edited"]);
+  });
+
   it("replaces approved audio beyond the cap without vocal analysis and preserves history", async () => {
     const { db } = services;
     const config = db.doc("settings/app_settings");
     expect(settingsFromDocument({}).quality_checks).toBe(false);
     expect(settingsFromDocument({ quality_checks: true }).quality_checks).toBe(true);
-    await config.set({ daily_budget_usd: 1 });
+    await config.set({ daily_budget_usd: 1, rhyme_scheme: "AABB" });
     const id = "quality-switch";
     const song = db.doc("songs/" + id);
-    await song.set({ ...INITIAL_SONGS[0], status: "approved", storage_path: "songs/old.wav", best_take_id: "old" });
+    await song.set({ ...INITIAL_SONGS[0], lines: ["تعبانين", "سنين", "حنا", "معانا", "نردوها", "نهديوها"], status: "approved", storage_path: "songs/old.wav", best_take_id: "old" });
     for (let n = 1; n <= 4; n++) {
       const key = n === 1 ? "old" : "old-" + n;
       await song.collection("takes").doc(key).set({ id: key, take_number: n, storage_path: "songs/" + key + ".wav" });
@@ -200,6 +220,7 @@ describe("real local Express, Auth and Firestore", () => {
       expect(music).not.toHaveBeenCalled();
       const outcome = await generateTake(services, id, "owner", "generate");
       expect(outcome.status).toBe("approved");
+      expect(music.mock.calls[0][1]).toContain("Rhyming line endings: تعبانين, سنين, حنا, معانا, نردوها, نهديوها.");
       const take = await song.collection("takes").doc(outcome.take_id!).get();
       expect(take.data()).toMatchObject({ status: "ready", passed_all_checks: true, is_approved: true,
         auto_approved: true, vocal_check_pending: false, failure_reasons: [] });
@@ -223,7 +244,7 @@ describe("real local Express, Auth and Firestore", () => {
     const song = { ...INITIAL_SONGS[0], id: songId, number: 911, status: "failed", archived: false };
     const revision = lyricRevision(song.title, song.lines);
     const songRef = db.doc("songs/" + songId);
-    await db.doc("settings/app_settings").set({ quality_checks: true, daily_budget_usd: 0 });
+    await db.doc("settings/app_settings").set({ quality_checks: true, rhyme_scheme: "OFF", daily_budget_usd: 0 });
     const mp3 = await encodeMp3(tone());
     await services.bucket.file(raw).save(mp3, { resumable: false, contentType: "audio/mpeg" });
     await songRef.set(song);

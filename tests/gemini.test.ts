@@ -1,5 +1,7 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { proposeDrafts } from "../server/catalog.ts";
+import { DEFAULT_STUDIO_SETTINGS } from "../src/data/songs.ts";
 import { createGeminiModelCheck, Gemini } from "../server/gemini.ts";
 
 const api = vi.hoisted(() => ({ generateContent: vi.fn(), get: vi.fn(), reserveBudget: vi.fn() }));
@@ -28,6 +30,30 @@ afterEach(() => {
   vi.resetAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("returns an editable draft after exactly one paid rhyme retry", async () => {
+  const lines = ["بابا", "كتفي", "حنا", "معانا", "سنين", "تعبانين"];
+  api.generateContent.mockResolvedValue(reply(JSON.stringify({ title: "دار", lines, theme: "home", mood: "warm",
+    tempo_bpm: 80, instruments: "oud", vocal_tone: "soft", feeling_key: "home" })));
+  const history = { collection: () => ({ get: async () => ({ docs: [] }) }) } as unknown as Firestore;
+  const { drafts } = await proposeDrafts(history, DEFAULT_STUDIO_SETTINGS, ["family_evening"], 1, "");
+  expect(api.generateContent).toHaveBeenCalledTimes(2);
+  expect(api.reserveBudget).toHaveBeenCalledTimes(2);
+  expect(drafts[0].validation.valid).toBe(false);
+  expect(drafts[0].validation.errors[0]).toContain("don't rhyme");
+  expect(drafts[0].lines).toEqual(lines);
+});
+
+it.each(["AABB", "OFF"] as const)("drafts with the %s rhyme setting", async rhyme_scheme => {
+  api.generateContent.mockResolvedValue(reply(JSON.stringify({ title: "دار", lines: ["حنا"], rhyme_scheme,
+    rhyme_endings: ["نا"], theme: "home", mood: "warm", tempo_bpm: 80, instruments: "oud",
+    vocal_tone: "soft", feeling_key: "home" })));
+  await new Gemini(db).draft("family_evening", "", { ...DEFAULT_STUDIO_SETTINGS, rhyme_scheme }, []);
+  const prompt = api.generateContent.mock.calls[0][0].contents;
+  for (const instruction of ["Rhyme scheme AABB", "last two letters match", "Never rhyme a word with itself", "within ±2", "Return rhyme_endings"]) {
+    expect(prompt.includes(instruction)).toBe(rhyme_scheme === "AABB");
+  }
 });
 
 describe("Gemini vocal check", () => {

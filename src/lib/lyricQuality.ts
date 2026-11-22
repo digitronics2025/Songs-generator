@@ -1,3 +1,5 @@
+import type { StudioSettings } from "../data/songs.ts";
+
 export const ADMIN_FEELINGS = [
   "mothers_care",
   "fathers_pride",
@@ -197,6 +199,46 @@ export function normalizeArabicText(text: string): string {
     .toLowerCase();
 }
 
+export type RhymeScheme = StudioSettings["rhyme_scheme"];
+
+export function lastArabicWord(line: string): string {
+  return line.normalize("NFKC").match(/(?:(?=\p{Script=Arabic})\p{L}|[\p{M}\u0640])+/gu)
+    ?.filter(word => /\p{L}/u.test(word)).at(-1) ?? "";
+}
+
+export function rhymeKey(line: string): string {
+  const word = lastArabicWord(normalizeArabicText(line));
+  // The short حنا and longer معانا share the pronounced -na suffix.
+  const ending = word.length > 3 && !word.endsWith("نا") ? word.replace(/ا$/, "") : word;
+  return ending.slice(-2);
+}
+
+export function rhymeGroups(lineCount: number, scheme: RhymeScheme): number[][] {
+  const paired = lineCount - lineCount % 2;
+  if (scheme === "OFF" || paired < 2) return [];
+  if (scheme === "MONO") return [Array.from({ length: paired }, (_, i) => i)];
+  const groups: number[][] = [];
+  for (let i = 0; i < paired; i += 2) {
+    if (scheme === "ABAB" && i + 3 < paired) {
+      groups.push([i, i + 2], [i + 1, i + 3]);
+      i += 2;
+    } else groups.push([i, i + 1]);
+  }
+  return groups;
+}
+
+export function checkRhyme(lines: string[], scheme: RhymeScheme) {
+  const keys = lines.map(rhymeKey);
+  const words = lines.map(line => lastArabicWord(normalizeArabicText(line)));
+  const labels = lines.map(() => "");
+  const broken = rhymeGroups(lines.length, scheme).filter((group, index) => {
+    for (const i of group) labels[i] = String.fromCharCode(65 + index);
+    return group.some(i => keys[i].length < 2 || keys[i] !== keys[group[0]]) ||
+      new Set(group.map(i => words[i])).size !== group.length;
+  });
+  return { ok: broken.length === 0, keys, labels, broken };
+}
+
 export function countLineWords(line: string): number {
   const trimmed = line.trim();
   if (!trimmed) return 0;
@@ -237,6 +279,7 @@ export interface LyricValidationResult {
 export function validateLyrics(
   lines: string[],
   settings?: {
+    rhyme_scheme?: RhymeScheme;
     lines_per_song?: number;
     max_words_per_line?: number;
     forbidden_words?: string[];
@@ -386,6 +429,12 @@ export function validateLyrics(
       }
     }
   });
+
+  for (const group of checkRhyme(lines, settings?.rhyme_scheme ?? "OFF").broken) {
+    const numbers = group.map(i => i + 1).join(" and ");
+    const words = group.map(i => JSON.stringify(lastArabicWord(lines[i]))).join(" vs ");
+    errors.push(`Lines ${numbers} don't rhyme (${words}). Use distinct words with matching endings.`);
+  }
 
   return {
     valid: errors.length === 0,

@@ -25,6 +25,7 @@ export const autopilotSettings = z.object({
 export const studioSettings = z.object({
   feelings: z.array(label).min(1).max(30),
   lines_per_song: z.number().int().min(1).max(12),
+  rhyme_scheme: z.enum(["AABB", "ABAB", "MONO", "OFF"]),
   max_words_per_line: z.number().int().min(1).max(15),
   forbidden_words: z.array(z.string().trim().min(1).max(80)).max(100),
   block_substrings: z.boolean(),

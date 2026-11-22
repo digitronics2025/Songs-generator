@@ -53,7 +53,7 @@ export function useSongActions(songs: SongState[], qualityChecks: boolean, refre
     handleApproveLyric: (id: string) => mutate(songPath(id) + "/approve-lyric"),
     handleApproveTake: (id: string, take: string) => mutate(songPath(id) + "/takes/" + take, "POST", { approve: true }),
     handleChooseTake: (id: string, take: string) => mutate(songPath(id) + "/takes/" + take, "POST", { approve: false }),
-    handleSaveEdit: (id: string, edits: Partial<Omit<Draft, "feeling_key">>) => mutate(songPath(id), "PATCH", edits),
+    handleSaveEdit: (id: string, edits: Partial<Omit<Draft, "feeling_key">> & { expected_lines?: string[] }) => mutate(songPath(id), "PATCH", edits),
     handleChangeAdminFeeling: (id: string, admin_feeling: string) => mutate(songPath(id), "PATCH", { admin_feeling }),
     handleToggleArchive: (id: string, archived: boolean) => mutate(songPath(id) + "/archive", "POST", { archived }),
     handleSaveSettings: ({ ownerId, updated_at, ...settings }: StudioSettings) => {

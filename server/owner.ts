@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { FirebaseServices } from "./config.ts";
 import { ownerAuth, type OwnerAuthenticator } from "./auth.ts";
 import { assertLyrics, createSongs, importRecords, library, mutateSong, proposeDrafts, selectTake, serializeHistory } from "./catalog.ts";
+import { Gemini } from "./gemini.ts";
 import { HttpError } from "./errors.ts";
 import { generateTake, generationStatus } from "./generation.ts";
 import { rateLimit } from "./limits.ts";
@@ -78,15 +79,35 @@ export function ownerRouter(services: FirebaseServices, authenticate: OwnerAuthe
     if (feelings.some((feeling) => !settings.feelings.includes(feeling))) throw new HttpError(422, "Choose a studio feeling.");
     res.json(await proposeDrafts(db, settings, feelings, count, idea));
   });
+  api.post("/songs/:id/rhyme-fix", async (req, res) => {
+    emptyQuery(req);
+    emptyBody(req);
+    const { id: songId } = ids.parse(req.params);
+    const settings = await readSettings(db);
+    if (settings.rhyme_scheme === "OFF") throw new HttpError(422, "Choose a rhyme scheme in Settings first.");
+    const song = (await db.doc("songs/" + songId).get()).data();
+    if (!song) throw new HttpError(404, "Song not found.");
+    if (!Array.isArray(song.lines) || song.lines.length !== settings.lines_per_song) {
+      throw new HttpError(422, "The saved line count differs from the studio setting. Edit the lyric or update Settings first.");
+    }
+    await rateLimit(db, "paid", res.locals.uid, 8);
+    const draft = await new Gemini(db).draft(song.admin_feeling ?? settings.feelings[0], song.theme ?? "", settings, [], { title: song.title, lines: song.lines });
+    if (draft.lines.length !== song.lines.length) throw new HttpError(422, "Gemini changed the line count. Request a new rhyme fix.");
+    res.json({ before: song.lines, lines: draft.lines });
+  });
   api.patch("/songs/:id", async (req, res) => {
     emptyQuery(req);
     const { id: songId } = ids.parse(req.params);
-    const edits = editFields.parse(req.body);
+    const { expected_lines: expectedLines, ...fields } = z.object({ expected_lines: z.array(z.string()).optional() }).passthrough().parse(req.body);
+    const edits = editFields.parse(fields);
     const settings = await readSettings(db);
     if (edits.admin_feeling && !settings.feelings.includes(edits.admin_feeling)) {
       throw new HttpError(422, "Choose a studio feeling.");
     }
     await mutateSong(db, songId, (song) => {
+      if (expectedLines && JSON.stringify(song.lines) !== JSON.stringify(expectedLines)) {
+        throw new HttpError(409, "The lyrics changed. Request a fresh rhyme fix.");
+      }
       if (edits.lines) assertLyrics({ lines: edits.lines }, settings);
       const lyricEdited = edits.title !== undefined && edits.title !== song.title ||
         edits.lines !== undefined && JSON.stringify(edits.lines) !== JSON.stringify(song.lines);

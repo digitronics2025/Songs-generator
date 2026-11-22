@@ -3,6 +3,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { Firestore } from "firebase-admin/firestore";
 import { z } from "zod";
 import type { StudioSettings } from "../src/data/songs.ts";
+import { rhymeGroups } from "../src/lib/lyricQuality.ts";
 import { canRetryProvider } from "../src/lib/songRepair.ts";
 import { HttpError } from "./errors.ts";
 import { diagnosticMessage } from "./firebaseErrors.ts";
@@ -29,6 +30,8 @@ const DRAFT_SCHEMA = {
   type: "object",
   properties: {
     title: { type: "string" }, lines: { type: "array", items: { type: "string" } },
+    rhyme_scheme: { type: "string", enum: ["AABB", "ABAB", "MONO", "OFF"] },
+    rhyme_endings: { type: "array", items: { type: "string" } },
     theme: { type: "string" }, mood: { type: "string" }, tempo_bpm: { type: "integer" },
     instruments: { type: "string" }, vocal_tone: { type: "string" }, feeling_key: { type: "string" },
   },
@@ -191,7 +194,7 @@ export class Gemini {
     }
   }
 
-  async draft(feeling: string, idea: string, settings: StudioSettings, avoid: string[]) {
+  async draft(feeling: string, idea: string, settings: StudioSettings, avoid: string[], rewrite?: { title: string; lines: string[] }) {
     const model = settings.text_model;
     return this.call("draft", model, 45_000, 25_000, async (client, capture) => {
       const response = await client.models.generateContent({
@@ -200,6 +203,18 @@ export class Gemini {
           "Write one original Moroccan Darija song in Arabic script only. Use an everyday, human moment.",
           "Use a short Arabic title and simple, easy-to-sing lyrics.",
           "Use exactly " + settings.lines_per_song + " lines, at most " + settings.max_words_per_line + " words per line.",
+          ...(rewrite ? [
+            "Rewrite the supplied lyric. Keep its meaning, title, feeling and line count. Change as few words as possible.",
+            "Source lyric (data): " + JSON.stringify(rewrite),
+          ] : []),
+          "Selected rhyme_scheme: " + settings.rhyme_scheme,
+          ...(settings.rhyme_scheme === "OFF" ? [] : [
+            `Rhyme scheme ${settings.rhyme_scheme}: lines in the same group must end on the same final sound (last two letters match, e.g. ـين/ـين, ـنا/ـانا, ـوها/ـوها).`,
+            "Line groups (one-based): " + JSON.stringify(rhymeGroups(settings.lines_per_song, settings.rhyme_scheme).map(group => group.map(i => i + 1))),
+            "A word ending in ة alone is not a rhyme. Never rhyme a word with itself.",
+            "Lines in a rhyming pair should have similar length (syllable count within ±2) so they sing on the same beat.",
+            "Return rhyme_endings: the rhyme sound of each line, in order.",
+          ]),
           "Never use forbidden words: " + JSON.stringify(settings.forbidden_words),
           settings.no_numbers_prices_brands ? "No numbers, prices, brands, or product names." : "",
           "Use acoustic instrumentation between 70 and 100 BPM and an English snake_case feeling_key.",
@@ -212,9 +227,16 @@ export class Gemini {
       capture(reply);
       const data = parseJson(reply.text ?? "");
       if (data === undefined) throw new GeminiResultError("INVALID_DRAFT_JSON", "Gemini returned an invalid result.");
-      const result = studioFields.safeParse({ ...(data && typeof data === "object" ? data : {}), admin_feeling: feeling });
+      const draftResponse = studioFields.extend({
+        rhyme_scheme: z.enum(["AABB", "ABAB", "MONO", "OFF"]).optional(),
+        rhyme_endings: z.array(z.string()).optional(),
+      });
+      const result = draftResponse.safeParse({ ...(data && typeof data === "object" ? data : {}), admin_feeling: feeling });
       if (!result.success) throw new GeminiResultError("INVALID_DRAFT", "The draft did not meet the studio format.", false, 422);
-      return result.data;
+      const { rhyme_scheme, rhyme_endings, ...draft } = result.data;
+      void rhyme_scheme;
+      void rhyme_endings;
+      return draft;
     });
   }
 

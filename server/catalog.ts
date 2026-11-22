@@ -104,12 +104,30 @@ export async function proposeDrafts(
   const deadline = Date.now() + 160_000;
   attempts: for (let i = 0; i < count; i++) {
     const avoid = [...history, ...drafts].slice(-6).map((entry) => entry.title);
+    let rhymeRetried = false;
     for (let attempt = 0; attempt <= 3; attempt++) {
       if (Date.now() >= deadline) { failures.push("Drafting timed out. Generate the remaining drafts separately."); break attempts; }
       let draft: Draft;
+      let budgetReached = false;
       try {
         draft = await gemini.draft(feelings[i % feelings.length], idea, settings, avoid);
-        assertLyrics(draft, settings);
+        assertLyrics(draft, { ...settings, rhyme_scheme: "OFF" });
+        let validation = validateLyrics(draft.lines, settings);
+        if (!validation.valid && !rhymeRetried && Date.now() < deadline) {
+          rhymeRetried = true;
+          try {
+            draft = await gemini.draft(feelings[i % feelings.length], idea, settings, avoid, draft);
+            validation = validateLyrics(draft.lines, settings);
+          } catch (error) {
+            if (!(error instanceof HttpError) || ![422, 429].includes(error.status)) throw error;
+            if (error.status === 429) { failures.push(error.message); budgetReached = true; }
+          }
+        }
+        if (!validation.valid) {
+          drafts.push({ ...draft, closest_match_pct: closestLyric(draft, [...history, ...drafts]).closest_match_pct, validation });
+          if (budgetReached) break attempts;
+          break;
+        }
       } catch (error) {
         if (error instanceof HttpError && error.status === 422) {
           if (attempt === 3) failures.push("Draft " + (i + 1) + " did not pass lyric validation.");

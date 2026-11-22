@@ -59,6 +59,7 @@ export interface SongHistoryItem {
 export interface StudioSettings {
   feelings: string[];
   lines_per_song: number;
+  rhyme_scheme: "AABB" | "ABAB" | "MONO" | "OFF";
   max_words_per_line: number;
   forbidden_words: string[];
   block_substrings: boolean;
@@ -85,6 +86,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
     "new_home",
   ],
   lines_per_song: 6,
+  rhyme_scheme: "AABB",
   max_words_per_line: 5,
   forbidden_words: [
     "عيد",

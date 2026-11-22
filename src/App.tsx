@@ -26,8 +26,8 @@ import {
   type SongState,
   type SongsJsonEntry,
 } from "./data/songs";
-import { validateLyrics } from "./lib/lyricQuality";
-import { studioAudio } from "./lib/api";
+import { checkRhyme, validateLyrics } from "./lib/lyricQuality";
+import { ApiError, songPath, studioApi, studioAudio } from "./lib/api";
 import { countStatuses, filterStatus, type StatusFilter } from "./lib/catalogState";
 import { useStudio } from "./hooks/useStudio";
 import { useStudioAudio, saveBlob } from "./hooks/useStudioAudio";
@@ -55,6 +55,31 @@ export default function App() {
 
   // UI state
   const [activeTab, setActiveTab] = useState<ActiveTab>("library");
+  const [rhymeFilter, setRhymeFilter] = useState("All");
+  const [rhymeProgress, setRhymeProgress] = useState("");
+  const [proposals, setProposals] = useState<Array<{id: string; title: string; before: string[]; lines: string[]}>>([]);
+  const [applying, setApplying] = useState(false);
+
+  async function fixRhymes(selected: SongState[]) {
+    for (const [index, song] of selected.entries()) {
+      setRhymeProgress(`Checking rhyme ${index + 1} of ${selected.length}`);
+      try {
+        const request = () => studioApi<{ before: string[]; lines: string[] }>(songPath(song.id) + "/rhyme-fix", "POST");
+        const proposal = await request().catch(async error => {
+          if (!(error instanceof ApiError && error.status === 429 && error.message === "Too many requests. Try again in a minute.")) throw error;
+          setRhymeProgress(`Waiting for the request limit · song ${index + 1} of ${selected.length}`);
+          await new Promise(resolve => setTimeout(resolve, 60_000));
+          return request();
+        });
+        setProposals(current => [...current.filter(p => p.id !== song.id), { ...proposal, id: song.id, title: song.title }]);
+      } catch (error) {
+        setGlobalError(error instanceof Error ? error.message : "Rhyme fix failed.");
+        if (!(error instanceof ApiError) || error.status !== 422) break;
+      }
+    }
+    setRhymeProgress("");
+  }
+
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [feelingFilter, setFeelingFilter] = useState<string>("all");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
@@ -92,6 +117,8 @@ export default function App() {
         if (statusFilter !== "all" && filterStatus(song) !== statusFilter) return false;
       }
 
+      if (settings.rhyme_scheme !== "OFF" && rhymeFilter !== "All" &&
+          checkRhyme(song.lines, settings.rhyme_scheme).ok !== (rhymeFilter === "Rhymes")) return false;
       // Feeling filter
       if (feelingFilter !== "all" && song.admin_feeling !== feelingFilter) {
         return false;
@@ -130,7 +157,7 @@ export default function App() {
     }
 
     return result;
-  }, [songs, statusFilter, feelingFilter, dateFilter, searchQuery]);
+  }, [songs, settings.rhyme_scheme, rhymeFilter, statusFilter, feelingFilter, dateFilter, searchQuery]);
 
   const activeSongs = useMemo(() => songs.filter((song) => filterStatus(song) !== "archived"), [songs]);
   const statusCounts = useMemo(() => countStatuses(songs), [songs]);
@@ -604,6 +631,12 @@ export default function App() {
                 </div>
               </div>
 
+              <label className="mt-3 flex items-center gap-2 text-xs">Rhyme
+                <select className="rounded-md border border-[#D4D2CA] px-2 py-1" value={settings.rhyme_scheme === "OFF" ? "All" : rhymeFilter}
+                  disabled={settings.rhyme_scheme === "OFF"} onChange={e => setRhymeFilter(e.target.value)}>
+                  {["All", "Rhymes", "Broken"].map(option => <option key={option}>{option}</option>)}
+                </select>
+              </label>
               {/* Feelings Breakdown Bar (Clickable chips) */}
               <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
                 <span className="font-semibold text-[#6E6C66] mr-1">Feeling:</span>
@@ -635,6 +668,34 @@ export default function App() {
               </div>
             </section>
 
+            {rhymeProgress && <p role="status">{rhymeProgress}</p>}
+            {proposals.map(proposal => {
+              const check = validateLyrics(proposal.lines, settings);
+              return <section key={proposal.id} className="space-y-2 rounded-xl border bg-white p-4 text-sm">
+                <h3 className="font-semibold">Review rhyme fix · <bdi>{proposal.title}</bdi></h3>
+                <div className="grid grid-cols-2 gap-2 text-xs"><strong>Before</strong><strong>After</strong></div>
+                {Array.from({ length: Math.max(proposal.before.length, proposal.lines.length) }, (_, i) =>
+                  <div key={i} className="grid grid-cols-2 gap-2">
+                    <p dir="rtl">{proposal.before[i]}</p>
+                    {i < proposal.lines.length && <input disabled={applying} aria-label={`Proposed line ${i + 1}`} dir="rtl"
+                      className={`min-w-0 rounded border px-2 ${proposal.before[i] !== proposal.lines[i] ? "bg-green-50" : ""}`}
+                      value={proposal.lines[i]} onChange={e => setProposals(current => current.map(item => item.id !== proposal.id ? item :
+                        { ...item, lines: item.lines.map((line, index) => index === i ? e.target.value : line) }))} />}
+                  </div>)}
+                {!check.valid && <p className="text-[#B91C1C]">{check.errors.join(" ")}</p>}
+                <p className="text-xs">Applying changed lyrics requires a new recording. Existing takes stay in history.</p>
+                <button className="rounded border px-3 py-1" disabled={applying || !check.valid} onClick={async () => {
+                  setApplying(true);
+                  try {
+                    await handleSaveEdit(proposal.id, { lines: proposal.lines, expected_lines: proposal.before });
+                    setProposals(current => current.filter(p => p.id !== proposal.id));
+                  } catch { /* The save handler displays the error. */ }
+                  finally { setApplying(false); }
+                }}>Apply</button>
+                <button className="ml-2" disabled={applying} onClick={() => setProposals(current => current.filter(p => p.id !== proposal.id))}>Dismiss</button>
+              </section>;
+            })}
+
             {/* Selection Actions & Search Toolbar */}
             <div className="flex flex-col gap-3 rounded-xl border border-[#E5E4DF] bg-white p-3.5 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex flex-wrap items-center gap-2.5">
@@ -653,6 +714,9 @@ export default function App() {
                     <span className="font-mono text-xs font-bold text-[#1B3B6F]">
                       {selectedSongIds.size} selected
                     </span>
+                    <button disabled={!!rhymeProgress || settings.rhyme_scheme === "OFF"}
+                      onClick={() => void fixRhymes(songs.filter(song => selectedSongIds.has(song.id)))}
+                      className="rounded-md border px-2 py-1 text-xs">Fix rhyme</button>
 
                     <button
                       type="button"
@@ -763,6 +827,8 @@ export default function App() {
                     }}
                     onDownloadSingle={handleDownloadSingle}
                     onChangeAdminFeeling={handleChangeAdminFeeling}
+                    fixingRhyme={!!rhymeProgress}
+                    onFixRhyme={() => void fixRhymes([song])}
                     onSaveEdit={handleSaveEdit}
                     onApproveLyric={handleApproveLyric}
                     onCheckVocals={(number, take) => { void handleGenerateSong(number, false, take); }}
