@@ -49,8 +49,12 @@ export function retryable(error: unknown) {
 }
 
 class GeminiResultError extends HttpError {
-  constructor(readonly code: string, message: string, readonly retry = false, status = 502) {
+  readonly code: string;
+  readonly retry: boolean;
+  constructor(code: string, message: string, retry = false, status = 502) {
     super(status, message);
+    this.code = code;
+    this.retry = retry;
   }
 }
 
@@ -167,8 +171,22 @@ export function assertGeminiEnabled() {
 }
 
 export class Gemini {
-  constructor(private readonly db: Firestore, private readonly onRetry?: (status: number) => void,
-    private readonly onReserve?: (micros: number) => void, private readonly budget?: AutopilotBudget) {}
+  private readonly db: Firestore;
+  private readonly onRetry?: (status: number) => void;
+  private readonly onReserve?: (micros: number) => void;
+  private readonly budget?: AutopilotBudget;
+
+  constructor(
+    db: Firestore,
+    onRetry?: (status: number) => void,
+    onReserve?: (micros: number) => void,
+    budget?: AutopilotBudget
+  ) {
+    this.db = db;
+    this.onRetry = onRetry;
+    this.onReserve = onReserve;
+    this.budget = budget;
+  }
 
   private async call<T>(operation: string, model: string, cost: number, timeout: number,
     action: (client: GoogleGenAI, capture: (reply: Reply) => void) => Promise<T>) {

@@ -19,11 +19,13 @@ export interface FfmpegFailure {
 }
 
 export class FfmpegProcessError extends Error {
-  constructor(readonly diagnostic: FfmpegFailure) {
+  readonly diagnostic: FfmpegFailure;
+  constructor(diagnostic: FfmpegFailure) {
     const { candidate, phase, timed_out, exit_code, signal, error_code, stderr } = diagnostic;
     const reason = timed_out ? "timed out" : signal ? "terminated with " + signal :
       exit_code !== null ? "exited with code " + exit_code : error_code ?? "could not start";
     super("FFmpeg (" + candidate + ") " + reason + " during " + phase + (stderr ? ". " + stderr : "."));
+    this.diagnostic = diagnostic;
     this.name = "FfmpegProcessError";
   }
 

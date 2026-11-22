@@ -2,7 +2,11 @@ import { initializeApp, getApp, getApps } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
-import firebase from "../firebase-applet-config.json";
+import { readFileSync } from "node:fs";
+
+const firebase = JSON.parse(
+  readFileSync(new URL("../firebase-applet-config.json", import.meta.url), "utf8")
+) as { projectId: string; storageBucket: string; firestoreDatabaseId: string };
 
 export function firebaseServices() {
   const emulator = process.env.STUDIO_EMULATOR === "1";

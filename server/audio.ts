@@ -32,8 +32,10 @@ function loudness(output: string) {
 }
 
 export class MasteringError extends Error {
-  constructor(readonly stage: Extract<GenerationStage, "master_pass1" | "master_pass2" | "master_measure">, cause: unknown) {
+  readonly stage: Extract<GenerationStage, "master_pass1" | "master_pass2" | "master_measure">;
+  constructor(stage: Extract<GenerationStage, "master_pass1" | "master_pass2" | "master_measure">, cause: unknown) {
     super("FFmpeg mastering failed at " + stage + ".", { cause });
+    this.stage = stage;
   }
 }
 

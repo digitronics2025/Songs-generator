@@ -29,6 +29,7 @@ export function createApp(services: FirebaseServices, emails: string[], checkMod
   app.use("/api/v1", partnerRouter(services));
   app.use("/api/autopilot", autopilotRouter(services, authenticate));
   app.use("/api", ownerRouter(services, authenticate));
+  app.use("/api", (_req, res) => res.status(404).json({ error: "Unknown API route." }));
   const errors: ErrorRequestHandler = (error, req, res, next) => {
     if (res.headersSent) return next(error);
     if (error instanceof HttpError) {

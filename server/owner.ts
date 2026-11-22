@@ -56,7 +56,7 @@ export function ownerRouter(services: FirebaseServices, authenticate: OwnerAuthe
     const { dry_run } = z.object({ dry_run: z.boolean() }).strict().parse(req.body);
     res.json(await migrateCatalog(db, res.locals.uid, dry_run, bucket.name));
   });
-  api.post("/owner/migrations/rhyme-lyrics", async (req, res) => {
+  api.post(["/owner/migrations/rhyme-lyrics", "/migrations/rhyme-lyrics"], async (req, res) => {
     emptyQuery(req);
     const { dry_run } = z.object({ dry_run: z.boolean().default(true) }).strict().parse(req.body ?? {});
     res.json(await applyRhymedSeedLyrics(db, res.locals.uid, dry_run));
@@ -211,6 +211,6 @@ export function ownerRouter(services: FirebaseServices, authenticate: OwnerAuthe
     res.set("Allow", "GET").status(405).json({ error: "Use GET for studio audio." });
   });
   registerClientRoutes(api, db);
-  api.use((_req, _res, next) => next(new HttpError(404, "Studio endpoint not found.")));
+  api.use((_req, _res, next) => next(new HttpError(404, "Unknown API route.")));
   return api;
 }

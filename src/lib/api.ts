@@ -1,7 +1,11 @@
 import { auth } from "./firebase";
 
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) { super(message); }
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
 }
 
 export async function studioFetch(path: string, method = "GET", body?: unknown, signal?: AbortSignal) {

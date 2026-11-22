@@ -18,14 +18,18 @@ export function checkGenerationLimits(
 }
 
 export class BudgetLimitError extends HttpError {
-  constructor(readonly scope: "studio" | "autopilot" = "studio") {
+  readonly scope: "studio" | "autopilot";
+  constructor(scope: "studio" | "autopilot" = "studio") {
     super(429, scope === "autopilot" ? "The Autopilot daily Gemini budget has been reached." : "The studio daily Gemini budget has been reached.");
+    this.scope = scope;
   }
 }
 
 export class AutopilotStopped extends HttpError {
-  constructor(readonly reason: "time_limit" | "disabled" | "run_expired") {
+  readonly reason: "time_limit" | "disabled" | "run_expired";
+  constructor(reason: "time_limit" | "disabled" | "run_expired") {
     super(409, "Autopilot stopped because the run is no longer active.");
+    this.reason = reason;
   }
 }
 
