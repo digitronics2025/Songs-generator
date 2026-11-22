@@ -42,6 +42,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
   const [defaultModel, setDefaultModel] = useState(
     settings.default_model || "lyria-3-clip-preview"
   );
+  const [qualityChecks, setQualityChecks] = useState(settings.quality_checks);
   const [autopilot, setAutopilot] = useState(settings.autopilot);
   const [textModel, setTextModel] = useState(settings.text_model);
   const [budget, setBudget] = useState(settings.daily_budget_usd);
@@ -95,6 +96,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
     setBlockSubstrings(DEFAULT_STUDIO_SETTINGS.block_substrings);
     setNoNumbersPricesBrands(DEFAULT_STUDIO_SETTINGS.no_numbers_prices_brands);
     setDefaultModel(DEFAULT_STUDIO_SETTINGS.default_model);
+    setQualityChecks(DEFAULT_STUDIO_SETTINGS.quality_checks);
     setAutopilot(DEFAULT_STUDIO_SETTINGS.autopilot);
     setTextModel(DEFAULT_STUDIO_SETTINGS.text_model);
     setBudget(DEFAULT_STUDIO_SETTINGS.daily_budget_usd);
@@ -124,6 +126,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
         default_model: defaultModel,
         text_model: textModel.trim(),
         autopilot,
+        quality_checks: qualityChecks,
         target_length: Math.max(28, Math.min(44, Math.round(targetLength))),
         daily_budget_usd: budget,
         updated_at: new Date().toISOString(),
@@ -432,7 +435,13 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
           </div>
         </div>
       </div>
-      <AutopilotPanel settings={autopilot} onChange={setAutopilot} />
+      <section className="rounded-xl border bg-white p-6">
+        <label className="flex items-center gap-2 font-semibold"><input type="checkbox" checked={qualityChecks}
+          onChange={(event) => setQualityChecks(event.target.checked)} />Quality checks</label>
+        <p className="mt-2 text-sm">Off: one take per song, no transcription or audits, the song is approved as soon as audio is ready. On: multiple takes, transcription, automatic repair.</p>
+        {!qualityChecks && <p className="mt-2 text-sm">Turn on Quality checks to use autopilot.</p>}
+      </section>
+      <fieldset disabled={!qualityChecks}><AutopilotPanel settings={autopilot} onChange={setAutopilot} /></fieldset>
     </div>
   );
 }

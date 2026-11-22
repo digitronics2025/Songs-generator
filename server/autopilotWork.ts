@@ -81,7 +81,9 @@ export async function processAutopilotSong(
 ) {
   const { db } = services;
   const ref = db.doc("songs/" + candidate.id);
-  const [song, takes] = await Promise.all([ref.get(), ref.collection("takes").orderBy("take_number").get()]);
+  const [song, takes, settings] = await Promise.all([ref.get(), ref.collection("takes").orderBy("take_number").get(),
+    db.doc("settings/app_settings").get()]);
+  if (settings.get("quality_checks") !== true) throw new AutopilotStopped("disabled");
   const data = song.data();
   if (!data || data.archived || !activeStatuses.includes(data.status) || data.status === "approved") return {};
   if (typeof data.title !== "string" || !Array.isArray(data.lines) || !data.lines.every((line) => typeof line === "string")) return { failure: "Missing song metadata" };

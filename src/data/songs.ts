@@ -66,6 +66,7 @@ export interface StudioSettings {
   default_model: string;
   text_model: string;
   autopilot: AutopilotSettings;
+  quality_checks: boolean;
   target_length: number;
   daily_budget_usd: number;
   updated_at: string;
@@ -103,6 +104,7 @@ export const DEFAULT_STUDIO_SETTINGS: StudioSettings = {
   default_model: "lyria-3-clip-preview",
   text_model: "gemini-4-hydrogen",
   autopilot: DEFAULT_AUTOPILOT,
+  quality_checks: false,
   target_length: 30,
   daily_budget_usd: 0,
   updated_at: "",

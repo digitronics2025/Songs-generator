@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DocumentData, Firestore } from "firebase-admin/firestore";
+import { HttpError } from "./errors.ts";
 import type { AutopilotStatus, AutopilotSummary } from "../src/lib/autopilot.ts";
 import type { StudioSettings } from "../src/data/songs.ts";
 import { casablancaClock, nextAutopilotRun } from "./autopilotSchedule.ts";
@@ -31,7 +32,7 @@ export async function getAutopilotStatus(db: Firestore, now = Date.now()): Promi
     readSettings(db), db.collection(runsPath).orderBy("day", "desc").limit(1).get(),
   ]);
   const data = latest.docs[0]?.data();
-  return { last_run: data ? runSummary(data, now) : null, next_run_at: nextAutopilotRun(settings.autopilot, data?.day, now) };
+  return { last_run: data ? runSummary(data, now) : null, next_run_at: settings.quality_checks ? nextAutopilotRun(settings.autopilot, data?.day, now) : null };
 }
 
 export async function claimAutopilotRun(db: Firestore, scheduled: boolean, now = Date.now()) {
@@ -42,6 +43,7 @@ export async function claimAutopilotRun(db: Firestore, scheduled: boolean, now =
   return db.runTransaction(async (tx) => {
     const [existing, active, settingsDoc] = await tx.getAll(run, lock, db.doc("settings/app_settings"));
     const settings = settingsFromDocument(settingsDoc.data());
+    if (!settings.quality_checks) throw new HttpError(409, "Turn on Quality checks to use autopilot");
     const config = settings.autopilot;
     if (!config.enabled) return { skipped: "disabled" } as const;
     if (scheduled && time < config.run_time) return { skipped: "not_due" } as const;

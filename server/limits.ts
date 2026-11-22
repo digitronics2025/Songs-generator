@@ -55,7 +55,7 @@ export function checkAutopilotAllowance(run: DocumentSnapshot, settings: Documen
   }
   if (now >= budget.work_until) throw new AutopilotStopped("time_limit");
   const current = autopilotSettings.safeParse(settings.get("autopilot"));
-  if (!current.success || !current.data.enabled) throw new AutopilotStopped("disabled");
+  if (settings.get("quality_checks") !== true || !current.success || !current.data.enabled) throw new AutopilotStopped("disabled");
   const cap = Math.min(run.get("budget_micros"), Math.floor(current.data.daily_budget_usd * 1_000_000));
   checkBudget(run.get("reserved_micros"), cost, cap, "autopilot");
 }
