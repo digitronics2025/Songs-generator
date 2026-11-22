@@ -1,5 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
 import type { DocumentData, Firestore } from "firebase-admin/firestore";
-import { DEFAULT_STUDIO_SETTINGS, INITIAL_SONGS, formatSongFilename, type SongTake } from "../src/data/songs.ts";
+import { DEFAULT_STUDIO_SETTINGS, INITIAL_SONGS, PREVIOUS_SEED_LINES, formatSongFilename, type SongTake } from "../src/data/songs.ts";
 import { DEFAULT_ADMIN_FEELING_BY_KEY, validateLyrics } from "../src/lib/lyricQuality.ts";
 import { FieldValue } from "firebase-admin/firestore";
 import { storagePathFromUrl } from "./storage.ts";
@@ -100,6 +101,43 @@ export function migrationPatch(key: string, old: DocumentData, now: string, take
     ...(!old.storage_path && take?.storage_path ? { storage_path: take.storage_path } : {}),
     updated_at: now, migration_version: version,
   };
+}
+
+export async function applyRhymedSeedLyrics(db: Firestore, uid: string, dryRun: boolean) {
+  for (const spec of INITIAL_SONGS) {
+    const validation = validateLyrics(spec.lines, DEFAULT_STUDIO_SETTINGS);
+    if (!validation.valid) throw new Error("Invalid seed lyric " + spec.number + ": " + validation.errors.join(" "));
+  }
+  const result: Record<"updated" | "already" | "user_edited" | "missing" | "locked", number[]> =
+    { updated: [], already: [], user_edited: [], missing: [], locked: [] };
+  for (const { number, lines } of INITIAL_SONGS) {
+    const id = String(number);
+    const outcome = await db.runTransaction(async tx => {
+      const ref = db.doc("songs/" + id);
+      const [snap, lock] = await tx.getAll(ref, db.doc("studio_locks/" + id));
+      if ((lock.get("expires_at") ?? 0) > Date.now()) return "locked";
+      const song = snap.data();
+      if (!song) return "missing";
+      if (isDeepStrictEqual(song.lines, lines)) return "already";
+      if (!isDeepStrictEqual(song.lines, PREVIOUS_SEED_LINES[number])) return "user_edited";
+      if (!dryRun) {
+        const now = new Date().toISOString();
+        const patch = { lines, updated_at: now, proposed_lyric: null,
+          ...(song.archived || song.status === "archived" ? { pre_archive_status: "draft" } : { status: "draft" }) };
+        const states = [song, { ...song, ...patch }];
+        const refs = states.map(state => db.doc("song_history/rhyme_v1_" + id + "_" + lyricRevision(state.title ?? "", state.lines)));
+        const existing = await tx.getAll(...refs);
+        refs.forEach((history, i) => {
+          if (!existing[i].exists) tx.create(history, { ...historyRecord(history.id, id, states[i], "migrated", now), migrated_by: uid });
+        });
+        tx.update(ref, patch);
+        tx.set(db.doc("studio_meta/catalog"), { version: FieldValue.increment(1) }, { merge: true });
+      }
+      return "updated";
+    });
+    result[outcome].push(number);
+  }
+  return { scanned: INITIAL_SONGS.length, ...result };
 }
 
 export async function migrateCatalog(db: Firestore, uid: string, dryRun: boolean, bucket?: string) {

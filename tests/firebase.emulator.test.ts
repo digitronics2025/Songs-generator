@@ -14,9 +14,9 @@ import { claimAutopilotRun, getAutopilotStatus, runAutopilot } from "../server/a
 import { autopilotSongs, processAutopilotSong } from "../server/autopilotWork.ts";
 import { DEFAULT_AUTOPILOT } from "../src/lib/autopilot.ts";
 import { reserveBudget, hash, dayKey } from "../server/limits.ts";
-import { lyricRevision, migrateCatalog } from "../server/migration.ts";
+import { applyRhymedSeedLyrics, lyricRevision, migrateCatalog } from "../server/migration.ts";
 import { renderRules } from "../scripts/render-rules.ts";
-import { INITIAL_SONGS } from "../src/data/songs.ts";
+import { INITIAL_SONGS, PREVIOUS_SEED_LINES } from "../src/data/songs.ts";
 import { encodeMp3 } from "../server/ffmpeg.ts";
 import { tone } from "./audioFixture.ts";
 
@@ -333,6 +333,57 @@ describe("real local Express, Auth and Firestore", () => {
     expect(records.docs[0].data()).toMatchObject(ack);
     await ref.update({ revoked: true });
     expect((await fetch(origin + "/api/v1/songs", { headers })).status).toBe(401);
+  });
+});
+
+describe("rhymed seed migration", () => {
+  it("previews safely, preserves history and skips edited, missing and locked songs", async () => {
+    const { db } = services;
+    const song = (n: number) => db.doc("songs/" + n);
+    const all = INITIAL_SONGS.map(spec => spec.number);
+    const first = song(1);
+    const previous = { ...INITIAL_SONGS[0], lines: PREVIOUS_SEED_LINES[1], status: "approved",
+      storage_path: "songs/fixture.wav", best_take_id: "approved", approved_take_id: "approved" };
+    const edited = { ...INITIAL_SONGS[1], lines: ["Owner edit"] };
+    for (const spec of INITIAL_SONGS) await song(spec.number).set(spec);
+    await first.set(previous);
+    const take = first.collection("takes").doc("approved");
+    await take.set({ storage_path: previous.storage_path, is_approved: true });
+    await song(2).set(edited);
+    await song(3).delete();
+    await song(4).update({ lines: PREVIOUS_SEED_LINES[4], status: "archived", archived: true });
+    const lock = db.doc("studio_locks/4");
+    await lock.set({ expires_at: Date.now() + 60_000 });
+    const meta = db.doc("studio_meta/catalog");
+    const version = (await meta.get()).get("version") ?? 0;
+    const history = db.collection("song_history");
+    const size = (await history.get()).size;
+    const url = origin + "/api/owner/migrations/rhyme-lyrics";
+    expect((await fetch(url, { method: "POST" })).status).toBe(401);
+    const headers = { Authorization: "Bearer " + await googleToken(ownerEmail), "Content-Type": "application/json" };
+    const preview = await fetch(url, { method: "POST", headers, body: "{}" });
+    expect(await preview.json()).toEqual({ scanned: 20, updated: [1], user_edited: [2],
+      missing: [3], locked: [4], already: all.slice(4) });
+    expect((await first.get()).data()).toEqual(previous);
+    expect((await history.get()).size).toBe(size);
+    expect((await meta.get()).get("version")).toBe(version);
+    expect(await applyRhymedSeedLyrics(db, "owner", false)).toMatchObject({ updated: [1], user_edited: [2] });
+    expect((await first.get()).data()).toMatchObject({ ...previous, lines: INITIAL_SONGS[0].lines, status: "draft", proposed_lyric: null });
+    expect((await take.get()).data()).toEqual({ storage_path: previous.storage_path, is_approved: true });
+    expect((await song(2).get()).data()).toEqual(edited);
+    const records = (await history.where("song_id", "==", "1").get()).docs.filter(doc => doc.id.startsWith("rhyme_v1_"));
+    expect(records.map(doc => doc.get("lines"))).toEqual(expect.arrayContaining([previous.lines, INITIAL_SONGS[0].lines]));
+    expect(records).toHaveLength(2);
+    expect(records.every(doc => doc.get("action") === "migrated")).toBe(true);
+    await song(2).set(INITIAL_SONGS[1]);
+    await song(3).set(INITIAL_SONGS[2]);
+    await lock.delete();
+    expect((await applyRhymedSeedLyrics(db, "owner", false)).updated).toEqual([4]);
+    expect((await song(4).get()).data()).toMatchObject({ status: "archived", pre_archive_status: "draft" });
+    expect(await applyRhymedSeedLyrics(db, "owner", false)).toEqual({ scanned: 20, already: all,
+      updated: [], user_edited: [], missing: [], locked: [] });
+    expect((await meta.get()).get("version")).toBe(version + 2);
+    expect((await history.get()).size).toBe(size + 4);
   });
 });
 

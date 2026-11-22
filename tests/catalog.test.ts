@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_STUDIO_SETTINGS, INITIAL_SONGS } from "../src/data/songs.ts";
+import { DEFAULT_STUDIO_SETTINGS, INITIAL_SONGS, PREVIOUS_SEED_LINES } from "../src/data/songs.ts";
 import { normalizeArabicText, validateLyrics, compareTranscriptInOrder } from "../src/lib/lyricQuality.ts";
 import { closestLyric } from "../src/lib/duplicates.ts";
 import { countStatuses } from "../src/lib/catalogState.ts";
@@ -10,7 +10,21 @@ import { audioFailures, canRetryProvider, decideRepairAction, repeatedExtras } f
 
 describe("lyric rules", () => {
   it.each(INITIAL_SONGS)("passes the supplied seed for song $number", ({ lines }) => {
-    expect(validateLyrics(lines, { ...DEFAULT_STUDIO_SETTINGS, rhyme_scheme: "OFF" })).toEqual({ valid: true, errors: [] });
+    expect(validateLyrics(lines, DEFAULT_STUDIO_SETTINGS)).toEqual({ valid: true, errors: [] });
+  });
+  it.each(INITIAL_SONGS)("uses distinct paired rhyme endings in song $number", ({ lines }) => {
+    const endings = lines.map(line => normalizeArabicText(line).split(" ").at(-1)!);
+    for (let i = 0; i < endings.length; i += 2) {
+      expect(endings[i]).not.toBe(endings[i + 1]);
+      expect(endings[i].slice(-2)).toEqual(endings[i + 1].slice(-2));
+    }
+  });
+  it("retains a distinct original lyric for every seed", () => {
+    expect(Object.keys(PREVIOUS_SEED_LINES)).toHaveLength(20);
+    for (const song of INITIAL_SONGS) {
+      expect(PREVIOUS_SEED_LINES[song.number]).toHaveLength(6);
+      expect(PREVIOUS_SEED_LINES[song.number]).not.toEqual(song.lines);
+    }
   });
   it("rejects off-count lines, digits, brands, and forbidden forms", () => {
     const errors = validateLyrics(["ونتا كتشري واتساب ٣ دراهم", "فرحت بلمة", "ليل ونهار"]).errors.join(" ");

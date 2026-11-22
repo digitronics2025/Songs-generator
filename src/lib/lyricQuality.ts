@@ -233,7 +233,9 @@ export function checkRhyme(lines: string[], scheme: RhymeScheme) {
   const labels = lines.map(() => "");
   const broken = rhymeGroups(lines.length, scheme).filter((group, index) => {
     for (const i of group) labels[i] = String.fromCharCode(65 + index);
-    return group.some(i => keys[i].length < 2 || keys[i] !== keys[group[0]]) ||
+    const suffix = words[group[0]].slice(-2);
+    const writtenMatch = suffix.length === 2 && group.every(i => words[i].endsWith(suffix));
+    return (!writtenMatch && group.some(i => keys[i].length < 2 || keys[i] !== keys[group[0]])) ||
       new Set(group.map(i => words[i])).size !== group.length;
   });
   return { ok: broken.length === 0, keys, labels, broken };

@@ -7,7 +7,7 @@ import { Gemini } from "./gemini.ts";
 import { HttpError } from "./errors.ts";
 import { generateTake, generationStatus } from "./generation.ts";
 import { rateLimit } from "./limits.ts";
-import { migrateCatalog } from "./migration.ts";
+import { applyRhymedSeedLyrics, migrateCatalog } from "./migration.ts";
 import { registerClientRoutes } from "./partner.ts";
 import { batchLimit, editFields, empty, id, ids, importHistory, label, saveDraft, studioSettings } from "./schemas.ts";
 import { readSettings } from "./settings.ts";
@@ -55,6 +55,11 @@ export function ownerRouter(services: FirebaseServices, authenticate: OwnerAuthe
     emptyQuery(req);
     const { dry_run } = z.object({ dry_run: z.boolean() }).strict().parse(req.body);
     res.json(await migrateCatalog(db, res.locals.uid, dry_run, bucket.name));
+  });
+  api.post("/owner/migrations/rhyme-lyrics", async (req, res) => {
+    emptyQuery(req);
+    const { dry_run } = z.object({ dry_run: z.boolean().default(true) }).strict().parse(req.body ?? {});
+    res.json(await applyRhymedSeedLyrics(db, res.locals.uid, dry_run));
   });
   api.post("/history/import", async (req, res) => {
     emptyQuery(req);
