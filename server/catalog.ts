@@ -108,11 +108,11 @@ export async function proposeDrafts(
     for (let attempt = 0; attempt <= 3; attempt++) {
       if (Date.now() >= deadline) { failures.push("Drafting timed out. Generate the remaining drafts separately."); break attempts; }
       let draft: Draft;
-      let validation;
+      let budgetReached = false;
       try {
         draft = await gemini.draft(feelings[i % feelings.length], idea, settings, avoid);
         assertLyrics(draft, { ...settings, rhyme_scheme: "OFF" });
-        validation = validateLyrics(draft.lines, settings);
+        let validation = validateLyrics(draft.lines, settings);
         if (!validation.valid && !rhymeRetried && Date.now() < deadline) {
           rhymeRetried = true;
           try {
@@ -120,12 +120,12 @@ export async function proposeDrafts(
             validation = validateLyrics(draft.lines, settings);
           } catch (error) {
             if (!(error instanceof HttpError) || ![422, 429].includes(error.status)) throw error;
-            if (error.status === 429) failures.push(error.message);
+            if (error.status === 429) { failures.push(error.message); budgetReached = true; }
           }
         }
         if (!validation.valid) {
           drafts.push({ ...draft, closest_match_pct: closestLyric(draft, [...history, ...drafts]).closest_match_pct, validation });
-          if (failures.length) break attempts;
+          if (budgetReached) break attempts;
           break;
         }
       } catch (error) {

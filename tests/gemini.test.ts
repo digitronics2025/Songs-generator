@@ -1,5 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { proposeDrafts } from "../server/catalog.ts";
 import { DEFAULT_STUDIO_SETTINGS } from "../src/data/songs.ts";
 import { createGeminiModelCheck, Gemini } from "../server/gemini.ts";
 
@@ -29,6 +30,19 @@ afterEach(() => {
   vi.resetAllMocks();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it("returns an editable draft after exactly one paid rhyme retry", async () => {
+  const lines = ["بابا", "كتفي", "حنا", "معانا", "سنين", "تعبانين"];
+  api.generateContent.mockResolvedValue(reply(JSON.stringify({ title: "دار", lines, theme: "home", mood: "warm",
+    tempo_bpm: 80, instruments: "oud", vocal_tone: "soft", feeling_key: "home" })));
+  const history = { collection: () => ({ get: async () => ({ docs: [] }) }) } as unknown as Firestore;
+  const { drafts } = await proposeDrafts(history, DEFAULT_STUDIO_SETTINGS, ["family_evening"], 1, "");
+  expect(api.generateContent).toHaveBeenCalledTimes(2);
+  expect(api.reserveBudget).toHaveBeenCalledTimes(2);
+  expect(drafts[0].validation.valid).toBe(false);
+  expect(drafts[0].validation.errors[0]).toContain("don't rhyme");
+  expect(drafts[0].lines).toEqual(lines);
 });
 
 it.each(["AABB", "OFF"] as const)("drafts with the %s rhyme setting", async rhyme_scheme => {

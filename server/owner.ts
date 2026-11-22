@@ -91,7 +91,8 @@ export function ownerRouter(services: FirebaseServices, authenticate: OwnerAuthe
       throw new HttpError(422, "The saved line count differs from the studio setting. Edit the lyric or update Settings first.");
     }
     await rateLimit(db, "paid", res.locals.uid, 8);
-    const draft = await new Gemini(db).draft(song.admin_feeling, song.theme ?? "", settings, [], { title: song.title, lines: song.lines });
+    const draft = await new Gemini(db).draft(song.admin_feeling ?? settings.feelings[0], song.theme ?? "", settings, [], { title: song.title, lines: song.lines });
+    if (draft.lines.length !== song.lines.length) throw new HttpError(422, "Gemini changed the line count. Request a new rhyme fix.");
     res.json({ before: song.lines, lines: draft.lines });
   });
   api.patch("/songs/:id", async (req, res) => {

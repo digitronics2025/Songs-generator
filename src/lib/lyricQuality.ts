@@ -202,14 +202,14 @@ export function normalizeArabicText(text: string): string {
 export type RhymeScheme = StudioSettings["rhyme_scheme"];
 
 export function lastArabicWord(line: string): string {
-  return line.normalize("NFKC").match(/(?=\p{Script=Arabic})[\p{Script=Arabic}\p{M}\u0640]+/gu)
+  return line.normalize("NFKC").match(/(?:(?=\p{Script=Arabic})\p{L}|[\p{M}\u0640])+/gu)
     ?.filter(word => /\p{L}/u.test(word)).at(-1) ?? "";
 }
 
 export function rhymeKey(line: string): string {
   const word = lastArabicWord(normalizeArabicText(line));
-  // Preserve the pronounced -na and -ha suffixes, including معانا and نردوها.
-  const ending = word.length > 3 && !/[نه]ا$/.test(word) ? word.replace(/ا$/, "") : word;
+  // The short حنا and longer معانا share the pronounced -na suffix.
+  const ending = word.length > 3 && !word.endsWith("نا") ? word.replace(/ا$/, "") : word;
   return ending.slice(-2);
 }
 

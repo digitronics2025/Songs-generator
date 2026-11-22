@@ -5,7 +5,7 @@ import type { Draft } from "../../server/schemas";
 
 export type SavedDraft = Draft & { isApproved: boolean };
 
-export function useSongActions(songs: SongState[], refresh: () => Promise<void>, report: (message: string) => void) {
+export function useSongActions(songs: SongState[], qualityChecks: boolean, refresh: () => Promise<void>, report: (message: string) => void) {
   const [generatingNumbers, setGeneratingNumbers] = useState<Set<number>>(new Set());
   async function mutate(path: string, method = "POST", body?: unknown) {
     try {
@@ -18,12 +18,12 @@ export function useSongActions(songs: SongState[], refresh: () => Promise<void>,
   }
   async function generate(songNumber: number, repair = false, checkTakeId?: string) {
     const song = songs.find((item) => item.number === songNumber);
-    if (!song) return { stopBatch: false };
+    if (!song || (!qualityChecks && (repair || checkTakeId))) return { stopBatch: false };
     setGeneratingNumbers((previous) => new Set([...previous, songNumber]));
     try {
       const endpoint = checkTakeId ? "/takes/" + encodeURIComponent(checkTakeId) + "/check-vocals" : repair ? "/repair" : "/generate";
       const outcome = await studioApi<{ status: string }>(songPath(song.id) + endpoint, "POST");
-      if (outcome.status === "failed" && !repair && !checkTakeId) {
+      if (qualityChecks && outcome.status === "failed" && !repair && !checkTakeId) {
         const repaired = await studioApi<{ status: string }>(songPath(song.id) + "/repair", "POST");
         if (repaired.status !== "failed") return { stopBatch: false };
       }

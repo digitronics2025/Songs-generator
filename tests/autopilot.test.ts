@@ -68,7 +68,7 @@ it("rechecks current settings, deadline and run identity before reserving a call
   const budget = { path: "studio_autopilot_runs/test", token: "active", work_until: 100, max_takes: 4 };
   const snap = (fields: Record<string, unknown>) => ({ get: (key: string) => fields[key] }) as DocumentSnapshot;
   const run = snap({ token: "active", status: "running", expires_at: 200, reserved_micros: 60_000, budget_micros: 200_000 });
-  const settings = (enabled: boolean, daily_budget_usd: number) => snap({ autopilot: { ...DEFAULT_AUTOPILOT, enabled, daily_budget_usd } });
+  const settings = (enabled: boolean, daily_budget_usd: number) => snap({ quality_checks: true, autopilot: { ...DEFAULT_AUTOPILOT, enabled, daily_budget_usd } });
   expect(() => checkAutopilotAllowance(run, settings(true, 0.1), budget, 40_000, 50)).not.toThrow();
   expect(() => checkAutopilotAllowance(run, settings(true, 0.1), budget, 40_001, 50)).toThrow("daily Gemini budget");
   expect(() => checkAutopilotAllowance(run, settings(false, 0.1), budget, 0, 50)).toThrow("no longer active");

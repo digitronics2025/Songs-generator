@@ -47,6 +47,7 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
 
   const claimed = await (async () => {
     const settings = await readSettings(db);
+    if (!settings.quality_checks && request !== "generate") throw new HttpError(409, "Quality checks are off.");
     const model = musicModel(settings.default_model);
     const tools = checkTakeId ? null : await audioHealth();
     return db.runTransaction(async (tx) => {
@@ -71,7 +72,7 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
       const spec = parsed.data;
       if (!repair) assertLyrics(spec, settings);
       const takes = takeDocs.docs.map((doc) => ({ ref: doc.ref, data: doc.data() as SongTake }));
-      const legacy = legacyTakes(song, date()).filter((take) => !takes.some(({ data }) =>
+      const legacy = legacyTakes(song, date(), bucket.name).filter((take) => !takes.some(({ data }) =>
         data.id === take.id || (take.storage_path && data.storage_path === take.storage_path)));
       const now = Date.now();
       const day = dayKey(now);
@@ -91,7 +92,7 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
       const run = budget ? await tx.getAll(db.doc(budget.path), db.doc("settings/app_settings")) : null;
       if (budget && run) checkAutopilotAllowance(run[0], run[1], budget, 0, now);
       const maxTakes = budget && run ? Math.min(budget.max_takes, run[1].get("autopilot.max_takes_per_song")) : undefined;
-      checkGenerationLimits(lease.data(), createsTake ? takes.length + legacy.length : 0, repair ? automatic : 0, now, maxTakes);
+      checkGenerationLimits(lease.data(), createsTake && settings.quality_checks ? takes.length + legacy.length : 0, repair ? automatic : 0, now, maxTakes);
       if (checkTakeId && (!resume?.data.vocal_check_pending || !resume.data.storage_path || resume.data.is_approved)) {
         throw new HttpError(409, "This take does not have a pending vocal check for the current lyric.");
       }
@@ -111,9 +112,12 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
       if (action?.type !== "REMASTER") {
         assertGeminiEnabled();
         const minimum = checkTakeId ? 60_000 : action?.type === "REQUEST_LYRIC_FIX" ? 45_000 :
-          (model === "lyria-3-clip-preview" ? 40_000 : 80_000) + 60_000;
+          (model === "lyria-3-clip-preview" ? 40_000 : 80_000) + (settings.quality_checks ? 60_000 : 0);
         checkBudget(usage.get("reserved_micros") ?? 0, minimum, Math.floor(settings.daily_budget_usd * 1_000_000));
         if (budget && run) checkAutopilotAllowance(run[0], run[1], budget, minimum, now);
+      }
+      if (!settings.quality_checks) {
+        for (const take of legacy) tx.create(ref.collection("takes").doc(take.id), take);
       }
       for (const take of takes) {
         if (take.data.status === "generating" && take.ref.id !== resume?.ref.id) {
@@ -211,7 +215,7 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
 
       stage = "master_pass1";
       let master = await masterWav(input, settings.target_length, action?.type === "REMASTER");
-      if (action?.type !== "REMASTER" && (master.lufs < -15 || master.lufs > -13 || master.true_peak_db > -1)) {
+      if (settings.quality_checks && action?.type !== "REMASTER" && (master.lufs < -15 || master.lufs > -13 || master.true_peak_db > -1)) {
         master = await masterWav(input, settings.target_length, true);
         note("Loudness or peak", "Re-mastered original audio", "Measured the new WAV");
       }
@@ -221,7 +225,7 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
       await bucket.file(main).save(master.wav, { resumable: false, contentType: "audio/wav", preconditionOpts: { ifGenerationMatch: 0 } });
       storage = main;
       if (action?.type !== "REMASTER" || action.source === "raw") {
-        vocalPending = true;
+        vocalPending = settings.quality_checks;
       } else if (action?.type === "REMASTER" && source) {
         metrics = { ...metrics, words_heard_pct: source.words_heard_pct,
           voice_start: source.voice_start, voice_end: source.voice_end,
@@ -230,7 +234,7 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
       }
       // Persist measured values with the WAV before any paid vocal analysis.
       await takeRef?.update({ ...metrics, storage_path: storage, vocal_check_pending: vocalPending });
-      if (action?.type !== "REMASTER") await checkVocals(master.wav, master.duration_seconds);
+      if (settings.quality_checks && action?.type !== "REMASTER") await checkVocals(master.wav, master.duration_seconds);
     }
   } catch (error) {
     failure = { cause: error, detail: logGenerationFailure(id, takeRef?.id ?? null, stage, error) };
@@ -239,8 +243,9 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
   const accessFailed = firebaseDataUnavailable(failure?.cause);
   const failureMessage = failure?.cause instanceof HttpError ? failure.cause.message : accessFailed ? DATA_CONFIGURATION : null;
   const failures = failure ? ["PROCESSING_ERROR", failure.detail.stage] :
-    suggested ? [] : vocalPending ? ["VOCAL_CHECK_PENDING"] : audioFailures(metrics);
+    suggested || !settings.quality_checks ? [] : vocalPending ? ["VOCAL_CHECK_PENDING"] : audioFailures(metrics);
   const success = !failure && !failures.length && Boolean(storage);
+  const autoApprove = success && !settings.quality_checks;
   const status = suggested ? (budget ? "lyric_approved" : "draft") : vocalPending && storage ? "needs_person" : success ? "ready" : "failed";
   let failureDetail = failure?.detail ?? null;
   if (!failure && !suggested && !vocalPending && failures.length) {
@@ -263,14 +268,14 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
     const takeData = { ...take?.data(), ...metrics, storage_path: storage, raw_storage_path: rawPath,
       status: success ? "ready" : "failed", failure_reasons: failures, failure_detail: failureDetail,
       vocal_check_pending: vocalPending, passed_all_checks: success, cost_estimate: (take?.get("cost_estimate") ?? 0) + cost };
-    if (takeRef) tx.update(takeRef, takeData);
+    if (takeRef) tx.update(takeRef, { ...takeData, ...(autoApprove ? { is_approved: true, auto_approved: true, approved_at: updatedAt } : {}) });
     const wasApproved = song.status === "approved";
-    const promote = storage && !wasApproved &&
+    const promote = storage && (autoApprove || !wasApproved) &&
       (success || !current.get("storage_path") || current.get("best_take_id") === takeRef?.id);
     if (suggested && budget) {
       const [run, currentSettings] = await tx.getAll(db.doc(budget.path), db.doc("settings/app_settings"));
       if ((revision.get("version") ?? 0) !== lyricHistoryVersion || run.get("token") !== budget.token ||
-          run.get("status") !== "running" || run.get("expires_at") <= Date.now() || currentSettings.get("autopilot.enabled") !== true) {
+          run.get("status") !== "running" || run.get("expires_at") <= Date.now() || currentSettings.get("quality_checks") !== true || currentSettings.get("autopilot.enabled") !== true) {
         tx.update(ref, { status: song.status, updated_at: updatedAt });
         tx.set(lock, { token, expires_at: 0 });
         return true;
@@ -279,7 +284,8 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
     const patch = {
       ...(promote ? takeProjection(takeData) : {}),
       ...(suggested ? { title: suggested.title, lines: suggested.lines, proposed_lyric: budget ? null : suggested } : {}),
-      status: wasApproved ? "approved" : status,
+      ...(autoApprove ? { auto_approved: true, approved_take_id: takeRef!.id } : {}),
+      status: autoApprove || wasApproved ? "approved" : status,
       error_message: failureMessage ?? (failure ? "Audio processing failed." : null),
       updated_at: updatedAt,
     };
@@ -300,7 +306,7 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
   if (lyricConflict) throw new HttpError(409, "Song history or Autopilot settings changed during the lyric repair.");
   if (failure?.cause instanceof HttpError || accessFailed) throw failure?.cause;
   if (failure) throw new HttpError(502, "Audio processing failed at " + failure.detail.stage + ". Open the take for details.");
-  return { status: song.status === "approved" ? "approved" : status, take_id: takeRef?.id ?? null };
+  return { status: autoApprove || song.status === "approved" ? "approved" : status, take_id: takeRef?.id ?? null };
 }
 
 export async function generationStatus(db: Firestore, id: string) {

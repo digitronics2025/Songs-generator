@@ -51,7 +51,7 @@ export default function App() {
     setDuration, handleTogglePlay, handleSeek, handleDownloadSingle } = useStudioAudio(setGlobalError, Boolean(user));
   const { generatingNumbers, handleGenerateSong, handleAddNewSong, handleAddBatchSongs, handleApproveLyric,
     handleApproveTake, handleChooseTake, handleSaveEdit, handleChangeAdminFeeling, handleToggleArchive, handleSaveSettings } =
-    useSongActions(songs, refresh, setGlobalError);
+    useSongActions(songs, settings.quality_checks, refresh, setGlobalError);
 
   // UI state
   const [activeTab, setActiveTab] = useState<ActiveTab>("library");
@@ -64,7 +64,13 @@ export default function App() {
     for (const [index, song] of selected.entries()) {
       setRhymeProgress(`Checking rhyme ${index + 1} of ${selected.length}`);
       try {
-        const proposal = await studioApi<{before: string[]; lines: string[]}>(songPath(song.id) + "/rhyme-fix", "POST");
+        const request = () => studioApi<{ before: string[]; lines: string[] }>(songPath(song.id) + "/rhyme-fix", "POST");
+        const proposal = await request().catch(async error => {
+          if (!(error instanceof ApiError && error.status === 429 && error.message === "Too many requests. Try again in a minute.")) throw error;
+          setRhymeProgress(`Waiting for the request limit · song ${index + 1} of ${selected.length}`);
+          await new Promise(resolve => setTimeout(resolve, 60_000));
+          return request();
+        });
         setProposals(current => [...current.filter(p => p.id !== song.id), { ...proposal, id: song.id, title: song.title }]);
       } catch (error) {
         setGlobalError(error instanceof Error ? error.message : "Rhyme fix failed.");
@@ -239,6 +245,8 @@ export default function App() {
       return;
     }
 
+    const replacements = selected.filter((song) => song.storage_path || song.download_url).length;
+    if (!settings.quality_checks && replacements && !window.confirm(`${replacements} selected songs already have audio. Replace it?`)) return;
     cancelBatchRef.current = false;
     setIsBatchRunning(true);
     setBatchProgress({ done: 0, total: selected.length });
@@ -669,7 +677,10 @@ export default function App() {
                 {Array.from({ length: Math.max(proposal.before.length, proposal.lines.length) }, (_, i) =>
                   <div key={i} className="grid grid-cols-2 gap-2">
                     <p dir="rtl">{proposal.before[i]}</p>
-                    <p dir="rtl" className={proposal.before[i] !== proposal.lines[i] ? "bg-green-50" : ""}>{proposal.lines[i]}</p>
+                    {i < proposal.lines.length && <input disabled={applying} aria-label={`Proposed line ${i + 1}`} dir="rtl"
+                      className={`min-w-0 rounded border px-2 ${proposal.before[i] !== proposal.lines[i] ? "bg-green-50" : ""}`}
+                      value={proposal.lines[i]} onChange={e => setProposals(current => current.map(item => item.id !== proposal.id ? item :
+                        { ...item, lines: item.lines.map((line, index) => index === i ? e.target.value : line) }))} />}
                   </div>)}
                 {!check.valid && <p className="text-[#B91C1C]">{check.errors.join(" ")}</p>}
                 <p className="text-xs">Applying changed lyrics requires a new recording. Existing takes stay in history.</p>
@@ -777,7 +788,7 @@ export default function App() {
               </div>
             )}
 
-            {(statusCounts.failed > 0 || statusCounts.generating > 0) && (
+            {settings.quality_checks && (statusCounts.failed > 0 || statusCounts.generating > 0) && (
               <button type="button" disabled={isBatchRunning} onClick={() => void handleGenerateSelected(true)}
                 className="inline-flex items-center gap-2 rounded-lg border border-[#D4D2CA] bg-white px-3 py-2 text-xs font-semibold disabled:opacity-50">
                 <Wrench className="h-4 w-4" /> Fix all failed

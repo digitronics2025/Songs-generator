@@ -33,6 +33,7 @@ export const studioSettings = z.object({
   default_model: musicModels,
   autopilot: autopilotSettings.optional(),
   text_model: z.string().trim().max(64).regex(/^gemini-[a-z0-9]+(?:[.-][a-z0-9]+)*$/).optional(),
+  quality_checks: z.boolean().optional(),
   target_length: z.number().int().min(28).max(44),
   daily_budget_usd: z.number().finite().min(0).max(1000).optional(),
 }).strict();
