@@ -8,6 +8,11 @@ interface Client {
   last_used_at: string | null;
 }
 
+type RhymeMigration = { scanned: number; updated: number[]; already: number[]; user_edited: number[]; missing: number[]; locked: number[] };
+function migrationSummary(result: RhymeMigration) {
+  return `Scanned ${result.scanned}. Updated or eligible: ${result.updated.length}. Already current: ${result.already.length}. Edited by owner: ${result.user_edited.length} (${result.user_edited.join(", ") || "none"}). Missing: ${result.missing.length}. Locked: ${result.locked.length}.`;
+}
+
 type Migration = { scanned: number; migrated: number; skipped: number; seeded: number; legacy_takes: number };
 const btn = "rounded-lg border border-[#D4D2CA] px-3 py-2 text-xs font-semibold disabled:opacity-50";
 const input = "min-w-0 rounded-lg border border-[#D4D2CA] p-2 text-sm";
@@ -116,6 +121,16 @@ export function StudioAdministration({ refresh }: { refresh: () => Promise<void>
           setMigration(result);
           setMessage("Dry run found " + result.migrated + " songs to migrate, including " + result.seeded + " to seed and " + result.legacy_takes + " legacy takes.");
         })}>Preview catalog migration</button>
+        <button type="button" className={btn} disabled={busy} onClick={() => void run(async () => {
+          const path = "/owner/migrations/rhyme-lyrics";
+          const preview = await studioApi<RhymeMigration>(path, "POST", { dry_run: true });
+          const summary = migrationSummary(preview);
+          setMessage("Preview. " + summary);
+          if (!preview.updated.length || !window.confirm(summary + "\nApply rhymed lyrics and mark the updated songs for new audio?")) return;
+          const result = await studioApi<RhymeMigration>(path, "POST", { dry_run: false });
+          setMessage("Migration complete. " + migrationSummary(result));
+          await refresh();
+        })}>Apply rhymed lyrics</button>
         {migration && migration.migrated > 0 && <button type="button" className={btn} disabled={busy} onClick={() => {
           if (!window.confirm("Apply the catalog migration and keep all previous lyrics and audio?")) return;
           void run(async () => {
