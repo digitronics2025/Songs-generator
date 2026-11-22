@@ -110,6 +110,8 @@ export function SongRow({
   );
 
   const takes = song.takes || [];
+  const stored = takes.filter((take) => take.storage_path);
+  const previous = stored.filter((take) => take.storage_path !== song.storage_path);
   const hasAudio = Boolean(song.download_url || song.storage_path);
   const canGenerate =
     song.status === "lyric_approved" ||
@@ -248,7 +250,7 @@ export function SongRow({
                   <span className="inline-flex items-center gap-1 font-semibold text-[#15803D]">
                     <Check className="h-3.5 w-3.5" />
                     Ready · {song.duration_seconds?.toFixed(1) ?? "30"}s
-                    {takes.length > 0 ? ` (${takes.length} takes)` : ""}
+                    {settings.quality_checks && takes.length > 0 ? ` (${takes.length} takes)` : ""}
                   </span>
                 ) : song.status === "lyric_approved" ? (
                   <span className="inline-flex items-center gap-1 rounded-md bg-[#EFF6FF] px-2 py-0.5 font-semibold text-[#1D4ED8]">
@@ -320,7 +322,7 @@ export function SongRow({
             )}
 
             {/* Quality check summary (transcription, words heard %, voice timing) */}
-            {(typeof song.words_heard_pct === "number" || typeof song.voice_start_seconds === "number") && (
+            {settings.quality_checks && (typeof song.words_heard_pct === "number" || typeof song.voice_start_seconds === "number") && (
               <div className="mt-2 flex flex-wrap items-center gap-3 rounded-md bg-[#FAF9F6] px-3 py-1.5 text-[11px]">
                 {typeof song.words_heard_pct === "number" && (
                   <span
@@ -367,9 +369,19 @@ export function SongRow({
               </div>
             )}
 
-            <SongDetails id={song.id} updatedAt={song.updated_at} />
+            {settings.quality_checks && <SongDetails id={song.id} updatedAt={song.updated_at} />}
+            {!settings.quality_checks && stored.length > 1 && previous.length > 0 && (
+              <details className="mt-3 text-xs">
+                <summary className="cursor-pointer">Previous audio ({previous.length})</summary>
+                {previous.map((take) => <div key={take.id} className="mt-2 flex gap-3">
+                  <span>Take {take.take_number}</span>
+                  <button type="button" onClick={() => onTogglePlay(song, take)}>Play</button>
+                  <button type="button" onClick={() => onDownloadSingle(song, take)}>Download</button>
+                </div>)}
+              </details>
+            )}
             {/* Takes Drawer */}
-            {takes.length > 0 && (
+            {settings.quality_checks && takes.length > 0 && (
               <div className="mt-3 rounded-lg border border-[#ECEBE6] bg-[#FAF9F6] p-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
@@ -652,7 +664,9 @@ export function SongRow({
           {/* Generate Audio button */}
           <button
             type="button"
-            onClick={() => onGenerate(song.number)}
+            onClick={() => {
+              if (settings.quality_checks || !hasAudio || window.confirm("Replace the current audio?")) onGenerate(song.number);
+            }}
             disabled={!canGenerate || isBusy || isBatchRunning || !savedLyricCheck.valid}
             title={
               !canGenerate
@@ -675,7 +689,7 @@ export function SongRow({
             ) : song.status === "approved" || song.status === "ready" ? (
               <>
                 <RotateCcw className="h-3.5 w-3.5" />
-                Generate Take
+                {settings.quality_checks ? "Generate Take" : "Regenerate"}
               </>
             ) : (
               <>

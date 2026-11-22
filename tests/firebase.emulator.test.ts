@@ -1,10 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { once } from "node:events";
 import type { Server } from "node:http";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { assertFails, assertSucceeds, initializeTestEnvironment, type RulesTestEnvironment } from "@firebase/rules-unit-testing";
 import { collection, doc, getDoc, getDocs, setDoc } from "firebase/firestore";
 import { getBytes, ref, uploadBytes } from "firebase/storage";
+import * as gemini from "../server/gemini.ts";
+import { generateTake } from "../server/generation.ts";
+import { settingsFromDocument } from "../server/settings.ts";
 import { createApp } from "../server.ts";
 import { firebaseServices, type FirebaseServices } from "../server/config.ts";
 import { claimAutopilotRun, getAutopilotStatus, runAutopilot } from "../server/autopilot.ts";
@@ -172,6 +175,47 @@ describe("real local Express, Auth and Firestore", () => {
     expect(actions).toEqual(expect.arrayContaining(["migrated", "edited", "archived"]));
   });
 
+  it("replaces approved audio beyond the cap without vocal analysis and preserves history", async () => {
+    const { db } = services;
+    const config = db.doc("settings/app_settings");
+    expect(settingsFromDocument({}).quality_checks).toBe(false);
+    expect(settingsFromDocument({ quality_checks: true }).quality_checks).toBe(true);
+    await config.set({ daily_budget_usd: 1 });
+    const id = "quality-switch";
+    const song = db.doc("songs/" + id);
+    await song.set({ ...INITIAL_SONGS[0], status: "approved", storage_path: "songs/old.wav", best_take_id: "old" });
+    for (let n = 1; n <= 4; n++) {
+      const key = n === 1 ? "old" : "old-" + n;
+      await song.collection("takes").doc(key).set({ id: key, take_number: n, storage_path: "songs/" + key + ".wav" });
+    }
+    const old = await song.collection("takes").doc("old").get();
+    const music = vi.spyOn(gemini.Gemini.prototype, "music").mockResolvedValue(await encodeMp3(tone()));
+    const vocals = vi.spyOn(gemini.Gemini.prototype, "transcribe").mockRejectedValue(new Error("unexpected transcription"));
+    vi.spyOn(gemini, "assertGeminiEnabled").mockImplementation(() => {});
+    try {
+      await expect(claimAutopilotRun(db, false)).rejects.toMatchObject({ status: 409 });
+      for (const action of ["repair", { checkVocals: "old" }] as const) {
+        await expect(generateTake(services, id, "owner", action)).rejects.toMatchObject({ status: 409 });
+      }
+      expect(music).not.toHaveBeenCalled();
+      const outcome = await generateTake(services, id, "owner", "generate");
+      expect(outcome.status).toBe("approved");
+      const take = await song.collection("takes").doc(outcome.take_id!).get();
+      expect(take.data()).toMatchObject({ status: "ready", passed_all_checks: true, is_approved: true,
+        auto_approved: true, vocal_check_pending: false, failure_reasons: [] });
+      expect((await song.get()).data()).toMatchObject({ status: "approved", auto_approved: true,
+        approved_take_id: take.id, best_take_id: take.id, storage_path: take.get("storage_path") });
+      expect((await old.ref.get()).data()).toEqual(old.data());
+      await config.update({ quality_checks: true });
+      await expect(generateTake(services, id, "owner", "generate")).rejects.toMatchObject({ status: 409 });
+      expect(music).toHaveBeenCalledTimes(1);
+      expect(vocals).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+      await song.delete();
+    }
+  });
+
   it("recovers a saved raw MP3 in place with no Gemini budget, then holds it for vocal review", async () => {
     const db = services.db;
     const songId = "raw-recovery-fixture";
@@ -179,7 +223,7 @@ describe("real local Express, Auth and Firestore", () => {
     const song = { ...INITIAL_SONGS[0], id: songId, number: 911, status: "failed", archived: false };
     const revision = lyricRevision(song.title, song.lines);
     const songRef = db.doc("songs/" + songId);
-    await db.doc("settings/app_settings").set({ daily_budget_usd: 0 });
+    await db.doc("settings/app_settings").set({ quality_checks: true, daily_budget_usd: 0 });
     const mp3 = await encodeMp3(tone());
     await services.bucket.file(raw).save(mp3, { resumable: false, contentType: "audio/mpeg" });
     await songRef.set(song);
@@ -275,6 +319,7 @@ describe("Autopilot with real Firestore transactions", () => {
   it("handles scheduled time and prevents overlap across the Casablanca date boundary", async () => {
     const db = services.db;
     await db.doc("settings/app_settings").set({
+      quality_checks: true,
       autopilot: { ...DEFAULT_AUTOPILOT, enabled: true, daily_budget_usd: 0.1 },
     }, { merge: true });
     const before = Date.parse("2026-07-20T01:59:00Z");
@@ -289,6 +334,7 @@ describe("Autopilot with real Firestore transactions", () => {
     const db = services.db;
     await db.doc("settings/app_settings").set({
       daily_budget_usd: 10,
+      quality_checks: true,
       autopilot: { ...DEFAULT_AUTOPILOT, enabled: true, daily_budget_usd: 0.1, max_new_songs: 3 },
     }, { merge: true });
     const fixture = INITIAL_SONGS[0];

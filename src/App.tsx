@@ -51,7 +51,7 @@ export default function App() {
     setDuration, handleTogglePlay, handleSeek, handleDownloadSingle } = useStudioAudio(setGlobalError, Boolean(user));
   const { generatingNumbers, handleGenerateSong, handleAddNewSong, handleAddBatchSongs, handleApproveLyric,
     handleApproveTake, handleChooseTake, handleSaveEdit, handleChangeAdminFeeling, handleToggleArchive, handleSaveSettings } =
-    useSongActions(songs, refresh, setGlobalError);
+    useSongActions(songs, settings.quality_checks, refresh, setGlobalError);
 
   // UI state
   const [activeTab, setActiveTab] = useState<ActiveTab>("library");
@@ -218,6 +218,8 @@ export default function App() {
       return;
     }
 
+    const replacements = selected.filter((song) => song.storage_path || song.download_url).length;
+    if (!settings.quality_checks && replacements && !window.confirm(`${replacements} selected songs already have audio. Replace it?`)) return;
     cancelBatchRef.current = false;
     setIsBatchRunning(true);
     setBatchProgress({ done: 0, total: selected.length });
@@ -722,7 +724,7 @@ export default function App() {
               </div>
             )}
 
-            {(statusCounts.failed > 0 || statusCounts.generating > 0) && (
+            {settings.quality_checks && (statusCounts.failed > 0 || statusCounts.generating > 0) && (
               <button type="button" disabled={isBatchRunning} onClick={() => void handleGenerateSelected(true)}
                 className="inline-flex items-center gap-2 rounded-lg border border-[#D4D2CA] bg-white px-3 py-2 text-xs font-semibold disabled:opacity-50">
                 <Wrench className="h-4 w-4" /> Fix all failed
