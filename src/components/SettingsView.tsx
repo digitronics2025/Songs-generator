@@ -23,6 +23,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
   const [newFeeling, setNewFeeling] = useState("");
 
   const [linesPerSong, setLinesPerSong] = useState(settings.lines_per_song || 6);
+  const [rhymeScheme, setRhymeScheme] = useState(settings.rhyme_scheme);
   const [maxWordsPerLine, setMaxWordsPerLine] = useState(
     settings.max_words_per_line || 5
   );
@@ -90,6 +91,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
   const handleResetDefaults = () => {
     setFeelings(DEFAULT_STUDIO_SETTINGS.feelings);
     setLinesPerSong(DEFAULT_STUDIO_SETTINGS.lines_per_song);
+    setRhymeScheme(DEFAULT_STUDIO_SETTINGS.rhyme_scheme);
     setMaxWordsPerLine(DEFAULT_STUDIO_SETTINGS.max_words_per_line);
     setForbiddenWords(DEFAULT_STUDIO_SETTINGS.forbidden_words);
     setBlockSubstrings(DEFAULT_STUDIO_SETTINGS.block_substrings);
@@ -117,6 +119,7 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
       const updated: StudioSettings = {
         feelings,
         lines_per_song: Math.max(1, Math.min(12, Math.round(linesPerSong))),
+        rhyme_scheme: rhymeScheme,
         max_words_per_line: Math.max(1, Math.min(15, Math.round(maxWordsPerLine))),
         forbidden_words: forbiddenWords,
         block_substrings: blockSubstrings,
@@ -289,6 +292,16 @@ export function SettingsView({ settings, onSaveSettings }: SettingsViewProps) {
                 Standard: 5 words. Keeps vocal phrasing concise for 30s clips.
               </p>
             </div>
+            <label className="block text-xs font-semibold text-[#57554F]">
+              Rhyme scheme
+              <select className="mt-1 w-full rounded-lg border border-[#D4D2CA] bg-white px-3 py-2"
+                value={rhymeScheme} onChange={e => setRhymeScheme(e.target.value as typeof rhymeScheme)}>
+                <option value="AABB">AABB — lines 1–2, 3–4, 5–6 rhyme (recommended)</option>
+                <option value="ABAB">ABAB — alternating lines rhyme</option>
+                <option value="MONO">MONO — every line ends on the same sound (قافية واحدة)</option>
+                <option value="OFF">OFF — no rhyme check</option>
+              </select>
+            </label>
           </div>
         </div>
 

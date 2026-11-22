@@ -135,7 +135,7 @@ export async function migrateCatalog(db: Firestore, uid: string, dryRun: boolean
         file_name: formatSongFilename(spec!.number, spec!.feeling_key),
       };
       if ((spec || ("lines" in updated)) && Array.isArray(updated.lines) &&
-          !validateLyrics(updated.lines, DEFAULT_STUDIO_SETTINGS).valid) {
+          !validateLyrics(updated.lines, { ...DEFAULT_STUDIO_SETTINGS, rhyme_scheme: "OFF" }).valid) {
         throw new Error("A default lyric failed migration validation.");
       }
       if (!dryRun) {

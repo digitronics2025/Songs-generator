@@ -8,7 +8,8 @@ import {
 } from "lucide-react";
 import type { StudioSettings } from "../data/songs";
 import { studioApi } from "../lib/api";
-import { countLineWords, validateLyrics } from "../lib/lyricQuality";
+import { RhymeSummary, RhymeTag } from "./RhymeTag";
+import { checkRhyme, countLineWords, validateLyrics } from "../lib/lyricQuality";
 
 interface NewSongModalProps {
   isOpen: boolean;
@@ -97,6 +98,7 @@ export function NewSongModal({
   };
 
   const activeOption = generatedOptions[selectedIndex];
+  const rhyme = checkRhyme(draftLines, settings.rhyme_scheme);
   const activeValidation = validateLyrics(draftLines, settings);
 
   const handleSaveToLibrary = async () => {
@@ -288,6 +290,7 @@ export function NewSongModal({
               <div className="space-y-2 rounded-xl border border-[#ECEBE6] bg-[#FAF9F6] p-3.5">
                 <div className="flex items-center justify-between text-xs text-[#6E6C66]">
                   <span>Darija Lyrics (target: {settings.lines_per_song} lines)</span>
+                  <RhymeSummary result={rhyme} scheme={settings.rhyme_scheme} />
                   <span>Word count limit: {settings.max_words_per_line}w/line</span>
                 </div>
 
@@ -297,11 +300,11 @@ export function NewSongModal({
                   return (
                     <div key={idx} className="flex items-center gap-2">
                       <span
-                        className={`w-12 font-mono text-[11px] tabular-nums ${
+                        className={`shrink-0 font-mono text-[11px] tabular-nums ${
                           isWordOk ? "text-[#706E67]" : "font-bold text-[#DC2626]"
                         }`}
                       >
-                        L{idx + 1}: {wc}w
+                        L{idx + 1} · {wc}/{settings.max_words_per_line}w<RhymeTag result={rhyme} index={idx} />
                       </span>
                       <input
                         type="text"

@@ -7,10 +7,17 @@ import { decodeCursor, encodeCursor, encodePartnerSong } from "../server/partner
 import { signedAudio, storagePathFromUrl } from "../server/storage.ts";
 import { hash } from "../server/limits.ts";
 
+const modelReply = vi.hoisted(() => vi.fn());
+vi.mock("@google/genai", () => ({
+  GoogleGenAI: class { models = { generateContent: modelReply }; },
+  ThinkingLevel: { LOW: "LOW" },
+}));
+
 let running: Server | undefined;
 afterEach(async () => {
   if (running) await new Promise<void>((resolve) => running?.close(() => resolve()));
   running = undefined;
+  vi.unstubAllEnvs();
 });
 
 function stubs() {
@@ -39,6 +46,36 @@ async function launch(services: ReturnType<typeof stubs>) {
 }
 
 describe("local HTTP smoke", () => {
+  it("authenticates rhyme fixes and reserves the draft budget without writing lyrics or history", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "local-test-key");
+    vi.stubEnv("STUDIO_EMULATOR", "0");
+    const dependencies = stubs();
+    const before = ["يدين بابا تعبانين", "خرج بكري للخدمة", "باش ما نخصو والو", "كبرنا ونتا صابر", "دابا جا دورنا", "نردو ليك الفرحة"];
+    const lines = ["تعبانين", "سنين", "حنا", "معانا", "نردوها", "نهديوها"];
+    const writes: string[] = [];
+    dependencies.db = {
+      doc: (path: string) => ({ path, get: async () => ({ data: () => path === "songs/example"
+        ? { title: "تعب الواليد", admin_feeling: "fathers_pride", lines: before } : {} }) }),
+      runTransaction: (callback: (tx: unknown) => unknown) => callback({
+        get: async () => ({ get: () => undefined }),
+        getAll: async () => [{ get: () => 0 }, { get: () => 1 }],
+        set: ({ path }: { path: string }) => writes.push(path),
+      }),
+    } as unknown as typeof dependencies.db;
+    modelReply.mockImplementationOnce(async () => {
+      expect(writes.some(path => path.startsWith("studio_usage/"))).toBe(true);
+      return { text: JSON.stringify({ title: "تعب الواليد", lines, theme: "family", mood: "warm", tempo_bpm: 80,
+        instruments: "oud", vocal_tone: "soft", feeling_key: "fathers_effort" }) };
+    });
+    const url = await launch(dependencies) + "/api/songs/example/rhyme-fix";
+    expect((await fetch(url, { method: "POST" })).status).toBe(401);
+    expect((await fetch(url, { method: "POST", headers: { Authorization: "Bearer outsider" } })).status).toBe(403);
+    expect(writes).toEqual([]);
+    const response = await fetch(url, { method: "POST", headers: { Authorization: "Bearer owner" } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ before, lines });
+    expect(writes.every(path => /^studio_(limits|usage)\//.test(path))).toBe(true);
+  });
   it("requires owner auth and exact Google provider and rejects every foreign storage URL", async () => {
     const dependencies = stubs();
     const url = await launch(dependencies);

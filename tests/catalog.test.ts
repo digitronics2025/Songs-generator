@@ -10,7 +10,7 @@ import { audioFailures, canRetryProvider, decideRepairAction, repeatedExtras } f
 
 describe("lyric rules", () => {
   it.each(INITIAL_SONGS)("passes the supplied seed for song $number", ({ lines }) => {
-    expect(validateLyrics(lines, DEFAULT_STUDIO_SETTINGS)).toEqual({ valid: true, errors: [] });
+    expect(validateLyrics(lines, { ...DEFAULT_STUDIO_SETTINGS, rhyme_scheme: "OFF" })).toEqual({ valid: true, errors: [] });
   });
   it("rejects off-count lines, digits, brands, and forbidden forms", () => {
     const errors = validateLyrics(["ونتا كتشري واتساب ٣ دراهم", "فرحت بلمة", "ليل ونهار"]).errors.join(" ");

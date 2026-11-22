@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DocumentData, Firestore } from "firebase-admin/firestore";
 import type { SongTake } from "../src/data/songs.ts";
-import { compareTranscriptInOrder } from "../src/lib/lyricQuality.ts";
+import { compareTranscriptInOrder, lastArabicWord } from "../src/lib/lyricQuality.ts";
 import { audioFailures, decideRepairAction, repeatedExtras, type GenerationStage, type RepairLogEntry } from "../src/lib/songRepair.ts";
 import { masterWav } from "./ffmpeg.ts";
 import { assertLyrics, checkRepairLyric, takeProjection } from "./catalog.ts";
@@ -196,6 +196,10 @@ export async function generateTake(services: FirebaseServices, id: string, uid: 
           directive, "Theme: " + spec.theme, "Mood: " + spec.mood,
           "Tempo: " + tempo, "Instruments: " + spec.instruments, "Voice: " + spec.vocal_tone,
           "Use clear, dry solo vocals with soft accompaniment. Exact lyrics:", ...spec.lines,
+          ...(settings.rhyme_scheme === "OFF" ? [] : [
+            "Rhyming line endings: " + spec.lines.map(lastArabicWord).join(", ") +
+            ". Land on and slightly hold the final word of each rhyming pair on the beat.",
+          ]),
         ].join("\n"));
         stage = "raw_upload";
         const rawObject = folder + "-source.mp3";

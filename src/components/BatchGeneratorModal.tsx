@@ -12,7 +12,8 @@ import {
 } from "lucide-react";
 import { MAX_DRAFT_BATCH, type SongState, type StudioSettings } from "../data/songs";
 import { studioApi } from "../lib/api";
-import { countLineWords, validateLyrics } from "../lib/lyricQuality";
+import { RhymeSummary, RhymeTag } from "./RhymeTag";
+import { checkRhyme, countLineWords, validateLyrics } from "../lib/lyricQuality";
 
 interface BatchGeneratorModalProps {
   isOpen: boolean;
@@ -344,6 +345,7 @@ export function BatchGeneratorModal({
               {/* Drafts List */}
               <div className="space-y-3">
                 {drafts.map((draft, idx) => {
+                  const rhyme = checkRhyme(draft.lines, settings.rhyme_scheme);
                   const check = validateLyrics(draft.lines, settings);
                   return (
                     <div
@@ -439,7 +441,7 @@ export function BatchGeneratorModal({
 
                           <div className="space-y-1.5">
                             <label className="block text-[11px] font-semibold text-[#57554F]">
-                              Lyrics ({draft.lines.length} lines, max {settings.max_words_per_line}w/line)
+                              <RhymeSummary result={rhyme} scheme={settings.rhyme_scheme} /> Lyrics ({draft.lines.length} lines, max {settings.max_words_per_line}w/line)
                             </label>
                             {draft.lines.map((line, lineIdx) => {
                               const wc = countLineWords(line);
@@ -447,11 +449,11 @@ export function BatchGeneratorModal({
                               return (
                                 <div key={lineIdx} className="flex items-center gap-2">
                                   <span
-                                    className={`w-10 font-mono text-[10px] tabular-nums ${
+                                    className={`shrink-0 font-mono text-[10px] tabular-nums ${
                                       isOk ? "text-[#706E67]" : "font-bold text-[#DC2626]"
                                     }`}
                                   >
-                                    L{lineIdx + 1}: {wc}w
+                                    L{lineIdx + 1} · {wc}/{settings.max_words_per_line}w<RhymeTag result={rhyme} index={lineIdx} />
                                   </span>
                                   <input
                                     type="text"

@@ -20,7 +20,8 @@ import {
   Layers,
 } from "lucide-react";
 import type { SongState, SongTake, StudioSettings } from "../data/songs";
-import { countLineWords, validateLyrics } from "../lib/lyricQuality";
+import { RhymeSummary, RhymeTag } from "./RhymeTag";
+import { checkRhyme, countLineWords, validateLyrics } from "../lib/lyricQuality";
 
 interface SongRowProps {
   song: SongState;
@@ -38,6 +39,8 @@ interface SongRowProps {
   onGenerate: (songNumber: number) => void;
   onDownloadSingle: (song: SongState, take?: SongTake) => void;
   onChangeAdminFeeling: (songId: string, adminFeeling: string) => Promise<void>;
+  onFixRhyme: () => void;
+  fixingRhyme: boolean;
   onSaveEdit: (
     songId: string,
     updates: {
@@ -80,7 +83,7 @@ export function SongRow({
   onGenerate,
   onDownloadSingle,
   onChangeAdminFeeling,
-  onSaveEdit,
+  onSaveEdit, onFixRhyme, fixingRhyme,
   onApproveLyric,
   onCheckVocals,
   onApproveTake,
@@ -100,6 +103,8 @@ export function SongRow({
   const [draftInstruments, setDraftInstruments] = useState(song.instruments);
   const [draftAdminFeeling, setDraftAdminFeeling] = useState<string>(song.admin_feeling);
 
+  const rhyme = checkRhyme(draftLines, settings.rhyme_scheme);
+  const savedRhyme = checkRhyme(song.lines, settings.rhyme_scheme);
   const savedLyricCheck = useMemo(
     () => validateLyrics(song.lines, settings),
     [song.lines, settings]
@@ -320,8 +325,9 @@ export function SongRow({
             )}
 
             {/* Quality check summary (transcription, words heard %, voice timing) */}
-            {(typeof song.words_heard_pct === "number" || typeof song.voice_start_seconds === "number") && (
+            {(settings.rhyme_scheme !== "OFF" || typeof song.words_heard_pct === "number" || typeof song.voice_start_seconds === "number") && (
               <div className="mt-2 flex flex-wrap items-center gap-3 rounded-md bg-[#FAF9F6] px-3 py-1.5 text-[11px]">
+                <RhymeSummary result={savedRhyme} scheme={settings.rhyme_scheme} />
                 {typeof song.words_heard_pct === "number" && (
                   <span
                     className={`font-semibold tabular-nums ${
@@ -500,7 +506,7 @@ export function SongRow({
                           isWordOk ? "text-[#8A877F]" : "font-bold text-[#DC2626]"
                         }`}
                       >
-                        L{idx + 1} · {wc}/{settings.max_words_per_line}w
+                        L{idx + 1} · {wc}/{settings.max_words_per_line}w<RhymeTag result={savedRhyme} index={idx} />
                       </span>
                       <p
                         dir="rtl"
@@ -573,11 +579,11 @@ export function SongRow({
                     return (
                       <div key={idx} className="flex items-center gap-2">
                         <span
-                          className={`w-12 font-mono text-[10px] tabular-nums ${
+                          className={`shrink-0 font-mono text-[10px] tabular-nums ${
                             isOk ? "text-[#706E67]" : "font-bold text-[#DC2626]"
                           }`}
                         >
-                          L{idx + 1}: {wc}w
+                          L{idx + 1} · {wc}/{settings.max_words_per_line}w<RhymeTag result={rhyme} index={idx} />
                         </span>
                         <input
                           type="text"
@@ -687,6 +693,10 @@ export function SongRow({
 
           {/* Secondary actions: Edit lyric, Download, History, Archive */}
           <div className="flex items-center gap-1.5">
+            {!editing && settings.rhyme_scheme !== "OFF" && (
+              <button type="button" onClick={onFixRhyme} disabled={isBusy || fixingRhyme}
+                className="rounded-md border border-[#D4D2CA] px-2 py-1 text-xs">Fix rhyme</button>
+            )}
             {!editing && (
               <button
                 type="button"
