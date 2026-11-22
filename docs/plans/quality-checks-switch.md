@@ -11,7 +11,7 @@ When it is OFF:
 When it is ON, the app must work exactly as it does today.
 
 ## Decisions already made
-- Regenerating does NOT delete the old audio. The old take stays in Firestore/Storage and stays in History, but it is hidden from the song row.
+- Regenerating does NOT delete the old audio. The old take stays in Firestore/Storage. `SongHistoryDrawer` only shows lyric history, and the full Takes panel is hidden in this mode, so add a small collapsed "Previous audio (N)" list on the song row. Each entry offers only Play and Download: no metrics, no Best Take, no Approve.
 - Mastering still runs ONCE so loudness stays consistent. The second re-master pass (`server/generation.ts` ~line 210) is skipped.
 - Autopilot needs the checks to decide which takes qualify. While checks are OFF, autopilot cannot run: the server refuses to start a run, and the Settings page shows why.
 
@@ -20,16 +20,16 @@ When it is ON, the app must work exactly as it does today.
 ### 1. Setting
 - `src/data/songs.ts`: add `quality_checks: boolean` to `StudioSettings`, and `quality_checks: false` to `DEFAULT_STUDIO_SETTINGS`.
 - `server/schemas.ts`: add `quality_checks: z.boolean().optional()` to `studioSettings`. Do not change `server/settings.ts`: `settingsFromDocument` already merges defaults by schema key. Check that this is true.
-- `firestore.rules` (and `scripts/render-rules.ts` if the rules are generated): allow the new key on `settings/app_settings` writes. Then run `npm run rules:render`.
+- Do NOT touch `firestore.rules`. Clients cannot write settings; they are written only through the owner API (`PUT /settings` in `server/owner.ts`, validated by `studioSettings`), so the schema change above is enough.
 
 ### 2. Server: generation (`server/generation.ts`, `generateTake`)
 Read `settings.quality_checks` (`settings` is already loaded inside the claim transaction). When it is false:
 - Plain `"generate"` request: create the take as today. Then do music → raw upload → `masterWav` once → WAV upload. Skip the second master pass. Do NOT call `checkVocals`/`gemini.transcribe`. Set `vocalPending = false`.
 - `failures`: use `[]` instead of `audioFailures(metrics)`. A take with a stored WAV is `status: "ready"` and `passed_all_checks: true`. A real error (`PROCESSING_ERROR`) still fails the take.
-- After saving, auto-approve: in the final transaction, set the take to `is_approved: true, approved_at`, and set the song to `status: "approved", approved_take_id, best_take_id` plus `takeProjection(takeData)`. This replaces the previous audio on the song. The old take is left untouched.
+- After saving, auto-approve: in the final transaction, set the take to `is_approved: true, auto_approved: true, approved_at`, and set the song to `status: "approved", auto_approved: true, approved_take_id, best_take_id` plus `takeProjection(takeData)`. `SongRow` uses `auto_approved` to show "Auto-approved" rather than "Approved". This replaces the previous audio on the song. The old take is left untouched.
 - `"repair"` and `{ checkVocals }` requests: reject with `HttpError(409, "Quality checks are off.")` before any paid call.
 - Regenerating an already-approved song must be allowed. Today `promote` is false when `wasApproved`. Keep that behaviour when checks are ON, and promote anyway when checks are OFF.
-- The daily take limit (`checkGenerationLimits`) still applies.
+- Take cap: `checkGenerationLimits` (`server/limits.ts`) enforces a lifetime cap (`MAX_TAKES = 4`) on the number of takes. Old takes are kept, so with checks OFF that cap would block Regenerate forever. When checks are OFF, pass `0` as the take count so the cap is skipped. Keep the lease check (one generation at a time), and keep the daily budget (`daily_budget_usd`) as the cost guard. Checks ON: unchanged.
 
 ### 3. Server: routes and autopilot
 - `server/owner.ts` (~lines 144 and 152): the repair and check-vocals routes return 409 when checks are off (the guard in step 2 does this; just make sure the error reaches the client).
@@ -44,10 +44,15 @@ Read `settings.quality_checks` (`settings` is already loaded inside the claim tr
   - Keep the LUFS/dBTP readout only if it fits without the metrics bar. Otherwise hide it.
 - Pass `settings` down from wherever `SongRow` is rendered (`src/App.tsx` / `useStudio`) if it is not already available.
 - `src/hooks/useSongActions.ts`: hide or disable any "repair" / "check vocals" action when checks are OFF.
+- `src/App.tsx`:
+  - Hide the "Fix all failed" button (~line 725, `handleGenerateSelected(true)`, which sends `/repair`) when checks are OFF.
+  - "Generate Selected" (~line 655): when checks are OFF and any selected song already has audio, ask first ("N selected songs already have audio. Replace it?").
+- `src/components/SongRow.tsx`: add the "Previous audio (N)" list from the Decisions section. It shows only when checks are OFF and the song has more than one take with `storage_path`.
 
 ### 5. Tests (vitest)
 Mock Gemini/Lyria the same way the existing tests in `tests/` do.
-- With checks OFF, a generated take: transcribe is never called; the take is `ready`, `passed_all_checks: true`, `is_approved: true`; the song is `approved` with the new take's `storage_path`.
+- With checks OFF, a generated take: transcribe is never called; the take is `ready`, `passed_all_checks: true`, `is_approved: true`, `auto_approved: true`; the song is `approved`, `auto_approved: true`, with the new take's `storage_path`.
+- With checks OFF, a song that already has 4 or more takes can still regenerate (no take-limit 409). With checks ON, the cap still applies.
 - Regenerating an approved song with checks OFF: the song now points to the new take, and the old take document still exists.
 - With checks OFF, `"repair"` and `{ checkVocals }` return 409, and no Gemini call is made.
 - With checks ON, all existing tests pass unchanged.
