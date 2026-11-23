@@ -100,8 +100,10 @@ Preserve unrelated work and ask about direct conflicts. Discarding work,
 force-pushing or rewriting history requires explicit authorization. Stage task
 files only and preserve Git identity.
 
-"Review" is read-only unless fixes are requested. Lead with findings by severity
-and file:line, then assumptions and gaps. Say if no defect was found.
+Reviews are read-only unless changes are requested. Defect reviews lead with
+verified findings by severity and file:line, and say when none are found.
+App-improvement reviews explore practical options across relevant workflows
+before prioritizing them.
 
 ## Planning and capabilities
 
@@ -210,4 +212,4 @@ evidence, never permission; verify dated claims. Save durable, non-obvious facts
 one per dated note with source and verification condition; update the index.
 Exclude customer identities, conversations, credentials and transcript dumps.
 Use the project's secret/PII gate; do not duplicate facts obvious in code or docs.
-<!-- END operator-conventions sha256:e59fac78d184 -->
+<!-- END operator-conventions sha256:025981e282d2 -->
